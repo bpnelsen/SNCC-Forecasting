@@ -1,0 +1,108 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
+
+:root {
+  --font-body: 'DM Sans', sans-serif;
+  --font-mono: 'DM Mono', monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: #0D1117;
+  color: #C9D1D9;
+  font-family: var(--font-body);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Card ─────────────────────────────────────────────────────────────────── */
+.card {
+  @apply bg-[#161B22] border border-[#21262D] rounded-xl overflow-hidden;
+}
+.card-header {
+  @apply flex items-center justify-between px-4 py-3 border-b border-[#21262D];
+}
+.card-title {
+  @apply text-xs font-medium text-[#C9D1D9] uppercase tracking-wider;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+.btn-primary {
+  @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#D4A853] text-[#0D1117]
+         text-xs font-medium transition-opacity hover:opacity-90 disabled:opacity-50;
+}
+.btn-secondary {
+  @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#30363D]
+         text-[#8B949E] text-xs font-medium transition-colors hover:border-[#8B949E] hover:text-[#C9D1D9];
+}
+.btn-ghost {
+  @apply inline-flex items-center gap-1.5 px-2 py-1 rounded text-[#8B949E] text-xs
+         transition-colors hover:text-[#C9D1D9] hover:bg-[#21262D];
+}
+.btn-danger {
+  @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#F85149]/40
+         text-[#F85149] text-xs font-medium transition-colors hover:bg-[#F85149]/10;
+}
+
+/* ── Data table ───────────────────────────────────────────────────────────── */
+.data-table {
+  @apply w-full text-xs;
+}
+.data-table thead tr {
+  @apply border-b border-[#21262D];
+}
+.data-table th {
+  @apply px-4 py-2.5 text-left text-[10px] font-medium text-[#8B949E] uppercase tracking-wider whitespace-nowrap;
+}
+.data-table tbody tr {
+  @apply border-b border-[#21262D]/50 transition-colors hover:bg-[#21262D]/40;
+}
+.data-table td {
+  @apply px-4 py-2.5 text-[#8B949E] whitespace-nowrap;
+}
+.data-table td.num {
+  @apply text-right font-mono;
+}
+.data-table td.positive { @apply text-[#3FB950]; }
+.data-table td.negative { @apply text-[#F85149]; }
+
+/* ── Form inputs ──────────────────────────────────────────────────────────── */
+.form-input {
+  @apply w-full bg-[#0D1117] border border-[#30363D] rounded-lg px-3 py-2 text-sm
+         text-[#C9D1D9] placeholder-[#8B949E] focus:outline-none focus:border-[#D4A853]
+         transition-colors font-mono;
+}
+.form-label {
+  @apply block text-xs font-medium text-[#8B949E] mb-1;
+}
+
+/* ── Fade-up animations ───────────────────────────────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up   { animation: fadeUp 0.35s ease forwards; opacity: 0; }
+.fade-up-1 { animation-delay: 0.00s; }
+.fade-up-2 { animation-delay: 0.05s; }
+.fade-up-3 { animation-delay: 0.10s; }
+.fade-up-4 { animation-delay: 0.15s; }
+.fade-up-5 { animation-delay: 0.20s; }
+
+/* ── Badge ────────────────────────────────────────────────────────────────── */
+.badge {
+  @apply inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium;
+}
+.badge-green  { @apply bg-[#238636]/30 text-[#3FB950]; }
+.badge-gold   { @apply bg-[#D4A853]/20 text-[#D4A853]; }
+.badge-steel  { @apply bg-[#21262D]    text-[#8B949E]; }
+.badge-red    { @apply bg-[#DA3633]/20 text-[#F85149]; }
+
+/* ── Scrollbars ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #0D1117; }
+::-webkit-scrollbar-thumb { background: #30363D; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #8B949E; }

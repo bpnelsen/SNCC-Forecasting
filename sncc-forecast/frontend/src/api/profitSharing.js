@@ -1,7 +1,7 @@
-import axios from 'axios'
+import client from './client'
 
 export const getProfitSharing = (versionId) =>
-  axios.get(`/api/versions/${versionId}/profit-sharing`)
+  client.get(`/api/versions/${versionId}/profit-sharing`)
 
 export const updateProfitSharing = (versionId, data) =>
-  axios.put(`/api/versions/${versionId}/profit-sharing`, data)
+  client.put(`/api/versions/${versionId}/profit-sharing`, data)

@@ -2,7 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
 import os
+
+load_dotenv()
 
 from database import engine, SessionLocal
 from models import Base, ForecastVersion
@@ -32,9 +35,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="SNCC Forecast API", version="1.0.0", lifespan=lifespan)
 
+_origins = ["http://localhost:5174", "http://127.0.0.1:5174"]
+if os.environ.get("FRONTEND_URL"):
+    _origins.append(os.environ["FRONTEND_URL"])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5174", "http://127.0.0.1:5174"],
+    allow_origins=_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

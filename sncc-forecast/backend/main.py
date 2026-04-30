@@ -13,15 +13,20 @@ from routers import versions, loans, nhc, land_bucket, hhh, profit_sharing, impo
 
 # Create tables and seed on module load (required for Vercel serverless cold starts)
 def _init_db():
-    Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
     try:
-        if db.query(ForecastVersion).count() == 0:
-            from datetime import date
-            db.add(ForecastVersion(label="Initial", snapshot_date=date.today()))
-            db.commit()
-    finally:
-        db.close()
+        Base.metadata.create_all(bind=engine)
+        db = SessionLocal()
+        try:
+            if db.query(ForecastVersion).count() == 0:
+                from datetime import date
+                db.add(ForecastVersion(label="Initial", snapshot_date=date.today()))
+                db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        # Log but don't crash — lets /health still respond so Vercel shows the real error
+        import traceback
+        print(f"[SNCC] DB init error: {e}\n{traceback.format_exc()}")
 
 _init_db()
 

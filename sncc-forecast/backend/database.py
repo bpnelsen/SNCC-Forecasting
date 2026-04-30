@@ -5,14 +5,15 @@ from sqlalchemy.orm import sessionmaker
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./sncc_forecast.db")
 
-# Supabase/Postgres connection strings use "postgres://" but SQLAlchemy requires "postgresql://"
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
-# SQLite needs check_same_thread=False; Postgres does not
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+if DATABASE_URL.startswith("sqlite"):
+    connect_args = {"check_same_thread": False}
+    engine = create_engine(DATABASE_URL, connect_args=connect_args)
+else:
+    # Normalise postgres:// → postgresql+pg8000:// for Vercel (pure-Python driver, no system libs)
+    url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    if not url.startswith("postgresql+"):
+        url = url.replace("postgresql://", "postgresql+pg8000://", 1)
+    engine = create_engine(url)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

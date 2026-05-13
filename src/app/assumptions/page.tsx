@@ -1,54 +1,55 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { Assumptions } from '@/lib/types'
-import { Settings2, Save, AlertCircle, CheckCircle } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { Builder, LoanProgram, ForecastSettings } from '@/lib/types'
+import { ProgramModal } from '@/components/assumptions/ProgramModal'
+import {
+  Settings2, Save, AlertCircle, CheckCircle, Plus, Trash2, Pencil,
+} from 'lucide-react'
+
+type ProgramMode = { kind: 'create' } | { kind: 'edit'; program: LoanProgram } | null
 
 export default function AssumptionsPage() {
-  const [data, setData]       = useState<Assumptions | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving]   = useState(false)
-  const [msg, setMsg]         = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+  const [settings, setSettings] = useState<ForecastSettings | null>(null)
+  const [builders, setBuilders] = useState<Builder[]>([])
+  const [programs, setPrograms] = useState<LoanProgram[]>([])
+  const [loading,  setLoading]  = useState(true)
+  const [msg,      setMsg]      = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+  const [programModal, setProgramModal] = useState<ProgramMode>(null)
 
-  useEffect(() => {
-    fetch('/api/assumptions')
-      .then(r => r.json()).then(setData).finally(() => setLoading(false))
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [sRes, bRes, pRes] = await Promise.all([
+        fetch('/api/forecast-settings'),
+        fetch('/api/builders'),
+        fetch('/api/loan-programs'),
+      ])
+      if (sRes.ok) setSettings(await sRes.json())
+      if (bRes.ok) setBuilders(await bRes.json())
+      if (pRes.ok) setPrograms(await pRes.json())
+    } finally { setLoading(false) }
   }, [])
 
-  const save = async () => {
-    if (!data) return
-    setSaving(true); setMsg(null)
-    try {
-      const res = await fetch('/api/assumptions', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
-      })
-      if (!res.ok) throw new Error((await res.json()).error)
-      setMsg({ type: 'ok', text: 'Assumptions saved successfully.' })
-    } catch (e) {
-      setMsg({ type: 'err', text: e instanceof Error ? e.message : 'Save failed' })
-    } finally { setSaving(false) }
+  useEffect(() => { load() }, [load])
+
+  const flash = (type: 'ok' | 'err', text: string) => {
+    setMsg({ type, text })
+    setTimeout(() => setMsg(null), 3500)
   }
 
-  const update = (field: keyof Assumptions, value: unknown) =>
-    setData(prev => prev ? { ...prev, [field]: value } : prev)
-
-  if (loading) return <div className="p-6 text-[#8B949E] text-sm">Loading…</div>
-  if (!data)   return null
+  if (loading) return <div className="p-6 text-[#8B949E] text-sm">Loading assumptions…</div>
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl">
-      <div className="flex items-center justify-between fade-up fade-up-1">
-        <div>
-          <h1 className="text-lg font-medium text-[#E6EDF3] flex items-center gap-2">
-            <Settings2 className="w-5 h-5 text-[#D4A853]" />
-            Assumptions
-          </h1>
-          <p className="text-xs text-[#8B949E] mt-0.5">Edit forecast variables · changes apply on next Dashboard load</p>
-        </div>
-        <button onClick={save} disabled={saving} className="btn-primary">
-          <Save className="w-3.5 h-3.5" />
-          {saving ? 'Saving…' : 'Save Changes'}
-        </button>
+    <div className="p-6 space-y-6 max-w-5xl">
+      <div className="fade-up fade-up-1">
+        <h1 className="text-lg font-medium text-[#E6EDF3] flex items-center gap-2">
+          <Settings2 className="w-5 h-5 text-[#D4A853]" />
+          Assumptions
+        </h1>
+        <p className="text-xs text-[#8B949E] mt-0.5">
+          Forecast settings, builders, and loan programs · changes apply on next Dashboard load
+        </p>
       </div>
 
       {msg && (
@@ -62,145 +63,376 @@ export default function AssumptionsPage() {
         </div>
       )}
 
-      {/* Draw Percentages */}
-      <Section title="Draw Percentages">
-        <Row label="SF Draw %" hint="Default: 90%">
-          <NumInput value={data.draw_pct_sf} onChange={v => update('draw_pct_sf', v)} pct />
-        </Row>
-        <Row label="MF Draw %" hint="Default: 92%">
-          <NumInput value={data.draw_pct_mf} onChange={v => update('draw_pct_mf', v)} pct />
-        </Row>
-        <Row label="Active Loans Draw %" hint="Applied to existing portfolio">
-          <NumInput value={data.draw_pct_active} onChange={v => update('draw_pct_active', v)} pct />
-        </Row>
-      </Section>
+      {/* ─── Forecast Settings ─────────────────────────────────────────── */}
+      <SettingsCard
+        settings={settings}
+        onSaved={(s) => { setSettings(s); flash('ok', 'Forecast settings saved.') }}
+        onError={(e) => flash('err', e)}
+      />
 
-      {/* Interest Rates */}
-      <Section title="Interest Rates">
-        <Row label="Rate — Projected Loans" hint="5.25% default">
-          <NumInput value={data.rate_projected_loans} onChange={v => update('rate_projected_loans', v)} pct />
-        </Row>
-        <Row label="Rate — Land Bucket" hint="5.25% default">
-          <NumInput value={data.rate_land_bucket} onChange={v => update('rate_land_bucket', v)} pct />
-        </Row>
-      </Section>
+      {/* ─── Builders ──────────────────────────────────────────────────── */}
+      <BuildersCard
+        builders={builders}
+        programs={programs}
+        onChanged={() => load().then(() => flash('ok', 'Builder saved.'))}
+        onError={(e) => flash('err', e)}
+      />
 
-      {/* Profit Sharing */}
-      <Section title="Profit Sharing (per unit)">
-        <Row label="Holmes SFR"><NumInput value={data.ps_holmes_sfr} onChange={v => update('ps_holmes_sfr', v)} /></Row>
-        <Row label="Holmes MFR"><NumInput value={data.ps_holmes_mfr} onChange={v => update('ps_holmes_mfr', v)} /></Row>
-        <Row label="Arive SFR"><NumInput value={data.ps_arive_sfr} onChange={v => update('ps_arive_sfr', v)} /></Row>
-        <Row label="Arive MFR"><NumInput value={data.ps_arive_mfr} onChange={v => update('ps_arive_mfr', v)} /></Row>
-      </Section>
+      {/* ─── Loan Programs ─────────────────────────────────────────────── */}
+      <div className="card fade-up fade-up-3">
+        <div className="card-header">
+          <span className="card-title">Loan Programs · {programs.length}</span>
+          <button onClick={() => setProgramModal({ kind: 'create' })} className="btn-primary">
+            <Plus className="w-3.5 h-3.5" /> New Program
+          </button>
+        </div>
+        {programs.length === 0 ? (
+          <div className="p-6 text-center text-xs text-[#8B949E]">
+            No loan programs yet. Click <strong>New Program</strong> to add one.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 p-4">
+            {programs.map(p => (
+              <ProgramCard
+                key={p.id}
+                program={p}
+                onEdit={() => setProgramModal({ kind: 'edit', program: p })}
+              />
+            ))}
+          </div>
+        )}
+      </div>
 
-      {/* NHCF Loan Counts */}
-      <Section title="New Originations — Monthly Loan Counts (NHCF)">
-        <p className="text-xs text-[#8B949E] mb-4">
-          Enter how many new loans each builder funds per month (months 0–11 = current through 12 months out).
-        </p>
-        <NhcfEditor
-          label="Loan Counts"
-          data={data.nhcf_loan_counts}
-          onChange={v => update('nhcf_loan_counts', v)}
+      {programModal && (
+        <ProgramModal
+          mode={programModal}
+          onClose={() => setProgramModal(null)}
+          onSaved={() => { setProgramModal(null); load().then(() => flash('ok', 'Program saved.')) }}
         />
-      </Section>
-
-      <Section title="Payoff Counts (NHCF)">
-        <NhcfEditor
-          label="Payoff Counts"
-          data={data.nhcf_payoff_counts}
-          onChange={v => update('nhcf_payoff_counts', v)}
-        />
-      </Section>
-
-      {/* Land Bucket */}
-      <Section title="Land Bucket Developments">
-        <p className="text-xs text-[#8B949E] mb-3">
-          {data.land_bucket.length} development(s) configured. Edit the JSON below to add/remove.
-        </p>
-        <textarea
-          className="form-input h-48 text-xs resize-y"
-          value={JSON.stringify(data.land_bucket, null, 2)}
-          onChange={e => {
-            try { update('land_bucket', JSON.parse(e.target.value)) } catch {}
-          }}
-        />
-      </Section>
+      )}
     </div>
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+// ─── Settings card ─────────────────────────────────────────────────────────
+
+function SettingsCard({
+  settings, onSaved, onError,
+}: {
+  settings: ForecastSettings | null
+  onSaved: (s: ForecastSettings) => void
+  onError: (e: string) => void
+}) {
+  const [form, setForm] = useState({
+    start_date: '',
+    horizon_months: '17',
+    default_rate_vertical: '5.25',
+    default_rate_land: '5.25',
+  })
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (settings) {
+      setForm({
+        start_date: settings.start_date,
+        horizon_months: String(settings.horizon_months),
+        default_rate_vertical: (settings.default_rate_vertical * 100).toFixed(2),
+        default_rate_land: (settings.default_rate_land * 100).toFixed(2),
+      })
+    }
+  }, [settings])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      const res = await fetch('/api/forecast-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          start_date: form.start_date,
+          horizon_months: Number(form.horizon_months),
+          default_rate_vertical: Number(form.default_rate_vertical) / 100,
+          default_rate_land: Number(form.default_rate_land) / 100,
+        }),
+      })
+      if (!res.ok) throw new Error((await res.json()).error || 'Save failed')
+      onSaved(await res.json())
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Save failed')
+    } finally { setSaving(false) }
+  }
+
   return (
     <div className="card fade-up fade-up-2">
-      <div className="card-header"><span className="card-title">{title}</span></div>
-      <div className="p-4 space-y-3">{children}</div>
-    </div>
-  )
-}
-
-function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <div>
-        <div className="text-xs font-medium text-[#C9D1D9]">{label}</div>
-        {hint && <div className="text-[10px] text-[#8B949E]">{hint}</div>}
+      <div className="card-header">
+        <span className="card-title">Forecast Settings</span>
+        <button onClick={save} disabled={saving} className="btn-primary">
+          <Save className="w-3.5 h-3.5" /> {saving ? 'Saving…' : 'Save'}
+        </button>
       </div>
-      <div className="w-36 shrink-0">{children}</div>
+      <div className="p-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <SmallField label="Start Date" hint="First month of the forecast">
+          <input
+            type="date" className="form-input"
+            value={form.start_date}
+            onChange={e => setForm(prev => ({ ...prev, start_date: e.target.value }))}
+          />
+        </SmallField>
+        <SmallField label="Horizon (months)">
+          <input
+            type="number" step="1" className="form-input"
+            value={form.horizon_months}
+            onChange={e => setForm(prev => ({ ...prev, horizon_months: e.target.value }))}
+          />
+        </SmallField>
+        <SmallField label="Vertical Rate (%)" hint="Fallback if loan has no rate">
+          <input
+            type="number" step="0.01" className="form-input"
+            value={form.default_rate_vertical}
+            onChange={e => setForm(prev => ({ ...prev, default_rate_vertical: e.target.value }))}
+          />
+        </SmallField>
+        <SmallField label="Land Rate (%)" hint="Fallback if project has no rate">
+          <input
+            type="number" step="0.01" className="form-input"
+            value={form.default_rate_land}
+            onChange={e => setForm(prev => ({ ...prev, default_rate_land: e.target.value }))}
+          />
+        </SmallField>
+      </div>
     </div>
   )
 }
 
-function NumInput({ value, onChange, pct = false }: { value: number; onChange: (v: number) => void; pct?: boolean }) {
+// ─── Builders card ─────────────────────────────────────────────────────────
+
+function BuildersCard({
+  builders, programs, onChanged, onError,
+}: {
+  builders: Builder[]
+  programs: LoanProgram[]
+  onChanged: () => void
+  onError: (e: string) => void
+}) {
+  const [adding, setAdding] = useState(false)
+  const [newRow, setNewRow] = useState<{ name: string; default_absorption_rate: string; default_loan_program_id: string; notes: string }>({
+    name: '', default_absorption_rate: '2', default_loan_program_id: '', notes: '',
+  })
+
+  const startAdd = () => {
+    setAdding(true)
+    setNewRow({ name: '', default_absorption_rate: '2', default_loan_program_id: '', notes: '' })
+  }
+
+  const saveNew = async () => {
+    if (!newRow.name.trim()) { onError('Name is required.'); return }
+    try {
+      const res = await fetch('/api/builders', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newRow.name.trim(),
+          default_absorption_rate: Number(newRow.default_absorption_rate) || 0,
+          default_loan_program_id: newRow.default_loan_program_id || null,
+          notes: newRow.notes || null,
+        }),
+      })
+      if (!res.ok) throw new Error((await res.json()).error || 'Create failed')
+      setAdding(false)
+      onChanged()
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Create failed')
+    }
+  }
+
   return (
-    <input
-      type="number"
-      className="form-input text-right"
-      value={pct ? (value * 100).toFixed(2) : value}
-      step={pct ? '0.01' : '1000'}
-      onChange={e => onChange(pct ? parseFloat(e.target.value) / 100 : parseFloat(e.target.value))}
-    />
+    <div className="card fade-up fade-up-2">
+      <div className="card-header">
+        <span className="card-title">Builders · {builders.length}</span>
+        <button onClick={startAdd} disabled={adding} className="btn-primary">
+          <Plus className="w-3.5 h-3.5" /> Add Builder
+        </button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th className="text-right">Default Absorption (lots/mo)</th>
+              <th>Default Program</th>
+              <th>Notes</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {adding && (
+              <tr className="bg-[#21262D]/40">
+                <td><input className="form-input" autoFocus value={newRow.name} onChange={e => setNewRow(p => ({ ...p, name: e.target.value }))} /></td>
+                <td><input type="number" step="0.1" className="form-input text-right" value={newRow.default_absorption_rate} onChange={e => setNewRow(p => ({ ...p, default_absorption_rate: e.target.value }))} /></td>
+                <td>
+                  <select className="form-input" value={newRow.default_loan_program_id} onChange={e => setNewRow(p => ({ ...p, default_loan_program_id: e.target.value }))}>
+                    <option value="">— none —</option>
+                    {programs.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </td>
+                <td><input className="form-input" value={newRow.notes} onChange={e => setNewRow(p => ({ ...p, notes: e.target.value }))} /></td>
+                <td>
+                  <div className="flex items-center gap-1 justify-end">
+                    <button onClick={() => setAdding(false)} className="btn-secondary">Cancel</button>
+                    <button onClick={saveNew} className="btn-primary"><Save className="w-3.5 h-3.5" /></button>
+                  </div>
+                </td>
+              </tr>
+            )}
+            {builders.map(b => (
+              <BuilderRow key={b.id} builder={b} programs={programs} onChanged={onChanged} onError={onError} />
+            ))}
+            {!adding && builders.length === 0 && (
+              <tr><td colSpan={5} className="text-center py-6 text-xs text-[#8B949E]">No builders yet.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
   )
 }
 
-function NhcfEditor({
-  label, data, onChange
-}: { label: string; data: Record<string, Record<string, number>>; onChange: (v: Record<string, Record<string, number>>) => void }) {
-  const builders = Object.keys(data)
-  const months   = Array.from({ length: 12 }, (_, i) => String(i))
+function BuilderRow({
+  builder, programs, onChanged, onError,
+}: {
+  builder: Builder
+  programs: LoanProgram[]
+  onChanged: () => void
+  onError: (e: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState({
+    name: builder.name,
+    default_absorption_rate: String(builder.default_absorption_rate),
+    default_loan_program_id: builder.default_loan_program_id ?? '',
+    notes: builder.notes ?? '',
+  })
+
+  useEffect(() => {
+    setDraft({
+      name: builder.name,
+      default_absorption_rate: String(builder.default_absorption_rate),
+      default_loan_program_id: builder.default_loan_program_id ?? '',
+      notes: builder.notes ?? '',
+    })
+  }, [builder])
+
+  const save = async () => {
+    if (!draft.name.trim()) { onError('Name is required.'); return }
+    try {
+      const res = await fetch(`/api/builders/${builder.id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: draft.name.trim(),
+          default_absorption_rate: Number(draft.default_absorption_rate) || 0,
+          default_loan_program_id: draft.default_loan_program_id || null,
+          notes: draft.notes || null,
+        }),
+      })
+      if (!res.ok) throw new Error((await res.json()).error || 'Save failed')
+      setEditing(false)
+      onChanged()
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Save failed')
+    }
+  }
+
+  const remove = async () => {
+    if (!confirm(`Delete builder "${builder.name}"?`)) return
+    try {
+      const res = await fetch(`/api/builders/${builder.id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error((await res.json()).error || 'Delete failed')
+      onChanged()
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Delete failed')
+    }
+  }
+
+  const programName = programs.find(p => p.id === builder.default_loan_program_id)?.name ?? '—'
+
+  if (editing) {
+    return (
+      <tr className="bg-[#21262D]/40">
+        <td><input className="form-input" value={draft.name} onChange={e => setDraft(p => ({ ...p, name: e.target.value }))} /></td>
+        <td><input type="number" step="0.1" className="form-input text-right" value={draft.default_absorption_rate} onChange={e => setDraft(p => ({ ...p, default_absorption_rate: e.target.value }))} /></td>
+        <td>
+          <select className="form-input" value={draft.default_loan_program_id} onChange={e => setDraft(p => ({ ...p, default_loan_program_id: e.target.value }))}>
+            <option value="">— none —</option>
+            {programs.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </td>
+        <td><input className="form-input" value={draft.notes} onChange={e => setDraft(p => ({ ...p, notes: e.target.value }))} /></td>
+        <td>
+          <div className="flex items-center gap-1 justify-end">
+            <button onClick={() => setEditing(false)} className="btn-secondary">Cancel</button>
+            <button onClick={save} className="btn-primary"><Save className="w-3.5 h-3.5" /></button>
+          </div>
+        </td>
+      </tr>
+    )
+  }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="data-table text-[10px]">
-        <thead>
-          <tr>
-            <th>Builder</th>
-            {months.map(m => <th key={m} className="text-center">M{m}</th>)}
-          </tr>
-        </thead>
-        <tbody>
-          {builders.map(builder => (
-            <tr key={builder}>
-              <td className="text-[#C9D1D9] font-medium capitalize">{builder.replace(/_/g, ' ')}</td>
-              {months.map(m => (
-                <td key={m} className="p-1">
-                  <input
-                    type="number"
-                    className="w-12 bg-[#0D1117] border border-[#30363D] rounded text-center text-[10px]
-                               text-[#C9D1D9] py-1 focus:outline-none focus:border-[#D4A853]"
-                    value={data[builder]?.[m] || 0}
-                    min={0}
-                    onChange={e => {
-                      const next = { ...data, [builder]: { ...data[builder], [m]: parseInt(e.target.value) || 0 } }
-                      onChange(next)
-                    }}
-                  />
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <tr>
+      <td className="text-[#C9D1D9] font-medium">{builder.name}</td>
+      <td className="num">{builder.default_absorption_rate}</td>
+      <td>{programName}</td>
+      <td className="text-[10px] max-w-xs truncate">{builder.notes || '—'}</td>
+      <td>
+        <div className="flex items-center gap-1 justify-end">
+          <button onClick={() => setEditing(true)} className="btn-ghost"><Pencil className="w-3 h-3" /></button>
+          <button onClick={remove} className="btn-ghost text-[#F85149]"><Trash2 className="w-3 h-3" /></button>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+// ─── Program card ──────────────────────────────────────────────────────────
+
+function ProgramCard({ program, onEdit }: { program: LoanProgram; onEdit: () => void }) {
+  const curveSum = program.draw_curve.reduce((s, v) => s + v, 0)
+  const maxCurve = Math.max(...program.draw_curve, 0.01)
+
+  return (
+    <div className="border border-[#21262D] rounded-lg p-3 hover:border-[#D4A853]/40 transition-colors">
+      <div className="flex items-start justify-between mb-2">
+        <div>
+          <div className="text-sm font-medium text-[#E6EDF3]">{program.name}</div>
+          <div className="text-[10px] text-[#8B949E] mt-0.5">
+            <span className="badge badge-steel mr-1">{program.product_type}</span>
+            {program.default_term_months} mo · {(program.default_rate * 100).toFixed(2)}%
+          </div>
+        </div>
+        <button onClick={onEdit} className="btn-ghost"><Pencil className="w-3 h-3" /></button>
+      </div>
+      <div className="flex items-end gap-0.5 h-10 mb-1 px-1 bg-[#0D1117] rounded">
+        {program.draw_curve.map((v, i) => (
+          <div key={i} className="flex-1 flex flex-col justify-end" title={`M${i + 1}: ${(v * 100).toFixed(1)}%`}>
+            <div className="bg-[#D4A853]/80 rounded-t" style={{ height: `${(v / maxCurve) * 100}%`, minHeight: '1px' }} />
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center justify-between text-[10px]">
+        <span className="text-[#8B949E]">{program.draw_curve.length} months of draws</span>
+        <span className={`font-mono ${Math.abs(curveSum - 1) < 0.01 ? 'text-[#3FB950]' : 'text-[#D4A853]'}`}>
+          Σ = {(curveSum * 100).toFixed(1)}%
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function SmallField({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="form-label">{label}</label>
+      {children}
+      {hint && <div className="text-[10px] text-[#8B949E] mt-1">{hint}</div>}
     </div>
   )
 }

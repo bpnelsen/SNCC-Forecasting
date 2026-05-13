@@ -3,12 +3,13 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
-  LayoutDashboard, TrendingUp, Settings2, Upload, History, Building2, Landmark
+  LayoutDashboard, TrendingUp, Settings2, Upload, History, Building2, Landmark, Wallet
 } from 'lucide-react'
 
 const nav = [
   { href: '/dashboard',   label: 'Dashboard',    icon: LayoutDashboard },
   { href: '/forecast',    label: 'Forecast',     icon: TrendingUp },
+  { href: '/cashflow',    label: 'Cash Flow',    icon: Wallet },
   { href: '/land-bucket', label: 'Land Bucket',  icon: Landmark },
   { href: '/assumptions', label: 'Assumptions',  icon: Settings2 },
   { href: '/import',      label: 'Import',       icon: Upload },

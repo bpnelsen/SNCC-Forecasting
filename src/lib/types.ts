@@ -170,6 +170,16 @@ export interface ForecastSettings {
   is_active: boolean
 }
 
+export interface ScheduledOrigination {
+  id: string
+  builder_id: string | null
+  loan_program_id: string
+  forecast_month: string
+  count: number
+  max_amount_per_loan: number
+  notes: string | null
+}
+
 // ─── Forecast outputs for Module 1 (Land Bucket) ────────────────────────────
 
 export interface LandBucketMonth {

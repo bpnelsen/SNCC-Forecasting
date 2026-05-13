@@ -7,6 +7,7 @@ import {
   Builder,
   LandBucketProject,
   ForecastSettings,
+  ScheduledOrigination,
 } from '@/lib/types'
 
 export async function GET() {
@@ -37,26 +38,29 @@ export async function GET() {
       }, { status: 500 })
     }
 
-    const [loansRes, buildersRes, programsRes, projectsRes] = await Promise.all([
+    const [loansRes, buildersRes, programsRes, projectsRes, scheduledRes] = await Promise.all([
       sb.from('loans').select('*').eq('version_id', version.id),
       sb.from('builders').select('*'),
       sb.from('loan_programs').select('*'),
       sb.from('land_bucket_projects').select('*'),
+      sb.from('scheduled_originations').select('*'),
     ])
 
-    if (loansRes.error)    throw loansRes.error
-    if (buildersRes.error) throw buildersRes.error
-    if (programsRes.error) throw programsRes.error
-    if (projectsRes.error) throw projectsRes.error
+    if (loansRes.error)     throw loansRes.error
+    if (buildersRes.error)  throw buildersRes.error
+    if (programsRes.error)  throw programsRes.error
+    if (projectsRes.error)  throw projectsRes.error
+    if (scheduledRes.error) throw scheduledRes.error
 
     const result = runForecast({
-      loans:               (loansRes.data    ?? []) as Loan[],
-      builders:            (buildersRes.data ?? []) as Builder[],
-      loanPrograms:        (programsRes.data ?? []) as LoanProgram[],
-      landBucketProjects:  (projectsRes.data ?? []) as LandBucketProject[],
-      settings:            settings as ForecastSettings,
-      versionLabel:        version.label,
-      asOfDate:            version.as_of_date || new Date().toISOString().split('T')[0],
+      loans:                 (loansRes.data     ?? []) as Loan[],
+      builders:              (buildersRes.data  ?? []) as Builder[],
+      loanPrograms:          (programsRes.data  ?? []) as LoanProgram[],
+      landBucketProjects:    (projectsRes.data  ?? []) as LandBucketProject[],
+      scheduledOriginations: (scheduledRes.data ?? []) as ScheduledOrigination[],
+      settings:              settings as ForecastSettings,
+      versionLabel:          version.label,
+      asOfDate:              version.as_of_date || new Date().toISOString().split('T')[0],
     })
 
     return NextResponse.json(result)

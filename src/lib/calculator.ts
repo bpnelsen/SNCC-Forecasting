@@ -7,6 +7,7 @@ import {
   Builder,
   LandBucketProject,
   ForecastSettings,
+  ScheduledOrigination,
   LandBucketMonth,
   LandBucketProjectSchedule,
   MonthlyBalance,
@@ -65,17 +66,18 @@ function programForLoanType(programs: LoanProgram[], loanType: LoanType): LoanPr
 
 // ─── Module 1: Land Bucket Engine ────────────────────────────────────────────
 
-interface LotOrigination {
+interface Origination {
   origination_month_idx: number
   count: number
   max_amount_per_loan: number
   program: LoanProgram
-  project_id: string
+  source: 'lot' | 'scheduled'
+  source_id: string
 }
 
 interface LandBucketRunResult {
   schedules: LandBucketProjectSchedule[]
-  lotOriginations: LotOrigination[]
+  lotOriginations: Origination[]
   totals: LandBucketMonth[]
 }
 
@@ -86,7 +88,7 @@ function runLandBucket(
   months: MonthSpec[],
 ): LandBucketRunResult {
   const schedules: LandBucketProjectSchedule[] = []
-  const lotOriginations: LotOrigination[] = []
+  const lotOriginations: Origination[] = []
   const totals: LandBucketMonth[] = months.map(m => ({
     month: m.key,
     label: m.label,
@@ -140,7 +142,8 @@ function runLandBucket(
           count: lotsThisMonth,
           max_amount_per_loan: amountPerLoan,
           program: verticalProgram,
-          project_id: project.id,
+          source: 'lot',
+          source_id: project.id,
         })
         newOrigsCount = lotsThisMonth
         newOrigsAmount = lotsThisMonth * amountPerLoan
@@ -215,12 +218,40 @@ function projectExistingLoanBalance(
   return maxAmount * cumulativeDraw(program.draw_curve, age)
 }
 
-// Lot-driven origination cohort balance at month index `m`.
-function lotOriginationBalance(orig: LotOrigination, m: number): number {
+// Origination cohort balance at month index `m`. Used for both lot-driven and
+// scheduled cohorts — the source field is purely descriptive.
+function originationBalance(orig: Origination, m: number): number {
   const age = m - orig.origination_month_idx
   if (age < 0) return 0
   if (age >= orig.program.default_term_months) return 0
   return orig.count * orig.max_amount_per_loan * cumulativeDraw(orig.program.draw_curve, age)
+}
+
+// Convert scheduled origination rows into cohorts pinned to a month index.
+// Rows whose forecast_month falls outside the horizon are dropped.
+function buildScheduledOriginations(
+  scheduled: ScheduledOrigination[],
+  programsById: Map<string, LoanProgram>,
+  months: MonthSpec[],
+): Origination[] {
+  const result: Origination[] = []
+  for (const s of scheduled) {
+    if (s.count <= 0 || s.max_amount_per_loan <= 0) continue
+    const program = programsById.get(s.loan_program_id)
+    if (!program) continue
+    const key = format(parseISO(s.forecast_month), 'yyyy-MM')
+    const idx = months.findIndex(m => m.key === key)
+    if (idx < 0) continue
+    result.push({
+      origination_month_idx: idx,
+      count: s.count,
+      max_amount_per_loan: s.max_amount_per_loan,
+      program,
+      source: 'scheduled',
+      source_id: s.id,
+    })
+  }
+  return result
 }
 
 // ─── Orchestrator ────────────────────────────────────────────────────────────
@@ -230,6 +261,7 @@ export interface ForecastInput {
   landBucketProjects: LandBucketProject[]
   builders: Builder[]
   loanPrograms: LoanProgram[]
+  scheduledOriginations: ScheduledOrigination[]
   settings: ForecastSettings
   versionLabel: string
   asOfDate: string
@@ -243,6 +275,8 @@ export function runForecast(input: ForecastInput): ForecastResult {
   const programsById = new Map(input.loanPrograms.map(p => [p.id, p]))
 
   const lb = runLandBucket(input.landBucketProjects, buildersById, programsById, months)
+  const scheduledOrigs = buildScheduledOriginations(input.scheduledOriginations, programsById, months)
+  const allOriginations: Origination[] = [...lb.lotOriginations, ...scheduledOrigs]
 
   const loansByType: Record<LoanType, Loan[]> = {
     SFR: [],
@@ -276,8 +310,8 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const newBySegment: Record<Segment, number> = {
       sfr: 0, mfr: 0, raw_land: 0, and: 0, finished_lots: 0, hhh: 0,
     }
-    for (const orig of lb.lotOriginations) {
-      const bal = lotOriginationBalance(orig, i)
+    for (const orig of allOriginations) {
+      const bal = originationBalance(orig, i)
       if (bal === 0) continue
       newBySegment[PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]] += bal
     }
@@ -301,8 +335,8 @@ export function runForecast(input: ForecastInput): ForecastResult {
       yield_active += bal * rate / 12
     }
     let yield_projected = 0
-    for (const orig of lb.lotOriginations) {
-      yield_projected += lotOriginationBalance(orig, i) * orig.program.default_rate / 12
+    for (const orig of allOriginations) {
+      yield_projected += originationBalance(orig, i) * orig.program.default_rate / 12
     }
     const yield_land_bucket = lb.totals[i].interest_income
     const total_income = yield_active + yield_projected + yield_land_bucket
@@ -321,11 +355,21 @@ export function runForecast(input: ForecastInput): ForecastResult {
       }
       prevExistingBalances.set(key, curr)
     }
-    // Lot-driven cohorts: pay off when age == term
-    for (const orig of lb.lotOriginations) {
+    // Origination cohorts pay off when age == term
+    for (const orig of allOriginations) {
       if (i - orig.origination_month_idx === orig.program.default_term_months) {
         payoffs_count += orig.count
         payoffs_amount += orig.count * orig.max_amount_per_loan
+      }
+    }
+
+    // Count new originations (lot-driven + scheduled) firing in this month
+    let new_origs_count = 0
+    let new_origs_amount = 0
+    for (const orig of allOriginations) {
+      if (orig.origination_month_idx === i) {
+        new_origs_count += orig.count
+        new_origs_amount += orig.count * orig.max_amount_per_loan
       }
     }
 
@@ -361,8 +405,8 @@ export function runForecast(input: ForecastInput): ForecastResult {
       annualized_yield_pct,
       lots_sold: lb.totals[i].lots_sold,
       lot_sale_proceeds: lb.totals[i].sale_proceeds,
-      new_originations_count: lb.totals[i].new_vertical_origs_count,
-      new_originations_amount: lb.totals[i].new_vertical_origs_amount,
+      new_originations_count: new_origs_count,
+      new_originations_amount: new_origs_amount,
       payoffs_count,
       payoffs_amount,
       cash_flow,

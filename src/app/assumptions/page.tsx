@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Builder, LoanProgram, ForecastSettings } from '@/lib/types'
+import { Builder, LoanProgram, ForecastSettings, ScheduledOrigination } from '@/lib/types'
 import { ProgramModal } from '@/components/assumptions/ProgramModal'
 import {
   Settings2, Save, AlertCircle, CheckCircle, Plus, Trash2, Pencil,
@@ -13,6 +13,7 @@ export default function AssumptionsPage() {
   const [settings, setSettings] = useState<ForecastSettings | null>(null)
   const [builders, setBuilders] = useState<Builder[]>([])
   const [programs, setPrograms] = useState<LoanProgram[]>([])
+  const [scheduled, setScheduled] = useState<ScheduledOrigination[]>([])
   const [loading,  setLoading]  = useState(true)
   const [msg,      setMsg]      = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
   const [programModal, setProgramModal] = useState<ProgramMode>(null)
@@ -20,14 +21,16 @@ export default function AssumptionsPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [sRes, bRes, pRes] = await Promise.all([
+      const [sRes, bRes, pRes, schedRes] = await Promise.all([
         fetch('/api/forecast-settings'),
         fetch('/api/builders'),
         fetch('/api/loan-programs'),
+        fetch('/api/scheduled-originations'),
       ])
-      if (sRes.ok) setSettings(await sRes.json())
-      if (bRes.ok) setBuilders(await bRes.json())
-      if (pRes.ok) setPrograms(await pRes.json())
+      if (sRes.ok)     setSettings(await sRes.json())
+      if (bRes.ok)     setBuilders(await bRes.json())
+      if (pRes.ok)     setPrograms(await pRes.json())
+      if (schedRes.ok) setScheduled(await schedRes.json())
     } finally { setLoading(false) }
   }, [])
 
@@ -102,6 +105,15 @@ export default function AssumptionsPage() {
           </div>
         )}
       </div>
+
+      {/* ─── Scheduled Originations ────────────────────────────────────── */}
+      <ScheduledOriginationsCard
+        scheduled={scheduled}
+        builders={builders}
+        programs={programs}
+        onChanged={() => load().then(() => flash('ok', 'Scheduled origination saved.'))}
+        onError={(e) => flash('err', e)}
+      />
 
       {programModal && (
         <ProgramModal
@@ -382,6 +394,248 @@ function BuilderRow({
       <td className="num">{builder.default_absorption_rate}</td>
       <td>{programName}</td>
       <td className="text-[10px] max-w-xs truncate">{builder.notes || '—'}</td>
+      <td>
+        <div className="flex items-center gap-1 justify-end">
+          <button onClick={() => setEditing(true)} className="btn-ghost"><Pencil className="w-3 h-3" /></button>
+          <button onClick={remove} className="btn-ghost text-[#F85149]"><Trash2 className="w-3 h-3" /></button>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+// ─── Scheduled Originations card ───────────────────────────────────────────
+
+interface ScheduledDraft {
+  builder_id: string
+  loan_program_id: string
+  forecast_month: string
+  count: string
+  max_amount_per_loan: string
+  notes: string
+}
+
+const EMPTY_SCHEDULED_DRAFT: ScheduledDraft = {
+  builder_id: '', loan_program_id: '', forecast_month: '',
+  count: '1', max_amount_per_loan: '', notes: '',
+}
+
+function ScheduledOriginationsCard({
+  scheduled, builders, programs, onChanged, onError,
+}: {
+  scheduled: ScheduledOrigination[]
+  builders: Builder[]
+  programs: LoanProgram[]
+  onChanged: () => void
+  onError: (e: string) => void
+}) {
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft]   = useState<ScheduledDraft>(EMPTY_SCHEDULED_DRAFT)
+
+  const startAdd = () => {
+    setAdding(true)
+    setDraft({
+      ...EMPTY_SCHEDULED_DRAFT,
+      loan_program_id: programs[0]?.id ?? '',
+    })
+  }
+
+  const saveNew = async () => {
+    if (!draft.loan_program_id) { onError('Loan program is required.'); return }
+    if (!draft.forecast_month) { onError('Month is required.'); return }
+    try {
+      const res = await fetch('/api/scheduled-originations', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(draft),
+      })
+      if (!res.ok) throw new Error((await res.json()).error || 'Create failed')
+      setAdding(false)
+      onChanged()
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Create failed')
+    }
+  }
+
+  return (
+    <div className="card fade-up fade-up-4">
+      <div className="card-header">
+        <span className="card-title">
+          Scheduled Originations · {scheduled.length}
+        </span>
+        <button onClick={startAdd} disabled={adding} className="btn-primary">
+          <Plus className="w-3.5 h-3.5" /> Add Origination
+        </button>
+      </div>
+      <div className="px-4 pt-2 pb-1 text-[10px] text-[#8B949E]">
+        Standalone (non-lot-driven) cohorts. Each row originates <code>count</code> loans in the chosen
+        month under the chosen program, drawing per that program&apos;s curve and paying off at term.
+      </div>
+      <div className="overflow-x-auto">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Builder</th>
+              <th>Program</th>
+              <th>Month</th>
+              <th className="text-right">Count</th>
+              <th className="text-right">$ / loan</th>
+              <th>Notes</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {adding && (
+              <tr className="bg-[#21262D]/40">
+                <td>
+                  <select className="form-input" value={draft.builder_id} onChange={e => setDraft(p => ({ ...p, builder_id: e.target.value }))}>
+                    <option value="">— any —</option>
+                    {builders.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                </td>
+                <td>
+                  <select className="form-input" value={draft.loan_program_id} onChange={e => setDraft(p => ({ ...p, loan_program_id: e.target.value }))}>
+                    <option value="">— pick program —</option>
+                    {programs.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </td>
+                <td>
+                  <input type="month" className="form-input" value={draft.forecast_month} onChange={e => setDraft(p => ({ ...p, forecast_month: e.target.value }))} />
+                </td>
+                <td><input type="number" min="0" step="1" className="form-input text-right" value={draft.count} onChange={e => setDraft(p => ({ ...p, count: e.target.value }))} /></td>
+                <td><input type="number" step="1000" className="form-input text-right" value={draft.max_amount_per_loan} onChange={e => setDraft(p => ({ ...p, max_amount_per_loan: e.target.value }))} /></td>
+                <td><input className="form-input" value={draft.notes} onChange={e => setDraft(p => ({ ...p, notes: e.target.value }))} /></td>
+                <td>
+                  <div className="flex items-center gap-1 justify-end">
+                    <button onClick={() => setAdding(false)} className="btn-secondary">Cancel</button>
+                    <button onClick={saveNew} className="btn-primary"><Save className="w-3.5 h-3.5" /></button>
+                  </div>
+                </td>
+              </tr>
+            )}
+            {scheduled.map(s => (
+              <ScheduledRow
+                key={s.id}
+                row={s}
+                builders={builders}
+                programs={programs}
+                onChanged={onChanged}
+                onError={onError}
+              />
+            ))}
+            {!adding && scheduled.length === 0 && (
+              <tr><td colSpan={7} className="text-center py-6 text-xs text-[#8B949E]">
+                No scheduled originations.
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function ScheduledRow({
+  row, builders, programs, onChanged, onError,
+}: {
+  row: ScheduledOrigination
+  builders: Builder[]
+  programs: LoanProgram[]
+  onChanged: () => void
+  onError: (e: string) => void
+}) {
+  const monthValue = row.forecast_month ? row.forecast_month.slice(0, 7) : ''
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<ScheduledDraft>(() => ({
+    builder_id: row.builder_id ?? '',
+    loan_program_id: row.loan_program_id,
+    forecast_month: monthValue,
+    count: String(row.count),
+    max_amount_per_loan: String(row.max_amount_per_loan),
+    notes: row.notes ?? '',
+  }))
+
+  useEffect(() => {
+    setDraft({
+      builder_id: row.builder_id ?? '',
+      loan_program_id: row.loan_program_id,
+      forecast_month: monthValue,
+      count: String(row.count),
+      max_amount_per_loan: String(row.max_amount_per_loan),
+      notes: row.notes ?? '',
+    })
+  }, [row, monthValue])
+
+  const save = async () => {
+    if (!draft.loan_program_id) { onError('Loan program is required.'); return }
+    if (!draft.forecast_month) { onError('Month is required.'); return }
+    try {
+      const res = await fetch(`/api/scheduled-originations/${row.id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(draft),
+      })
+      if (!res.ok) throw new Error((await res.json()).error || 'Save failed')
+      setEditing(false)
+      onChanged()
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Save failed')
+    }
+  }
+
+  const remove = async () => {
+    if (!confirm('Delete this scheduled origination?')) return
+    try {
+      const res = await fetch(`/api/scheduled-originations/${row.id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error((await res.json()).error || 'Delete failed')
+      onChanged()
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Delete failed')
+    }
+  }
+
+  const builderName = builders.find(b => b.id === row.builder_id)?.name ?? '—'
+  const programName = programs.find(p => p.id === row.loan_program_id)?.name ?? '—'
+  const monthLabel  = row.forecast_month
+    ? new Date(row.forecast_month + 'T00:00:00Z').toLocaleString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' })
+    : '—'
+
+  if (editing) {
+    return (
+      <tr className="bg-[#21262D]/40">
+        <td>
+          <select className="form-input" value={draft.builder_id} onChange={e => setDraft(p => ({ ...p, builder_id: e.target.value }))}>
+            <option value="">— any —</option>
+            {builders.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </td>
+        <td>
+          <select className="form-input" value={draft.loan_program_id} onChange={e => setDraft(p => ({ ...p, loan_program_id: e.target.value }))}>
+            {programs.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </td>
+        <td>
+          <input type="month" className="form-input" value={draft.forecast_month} onChange={e => setDraft(p => ({ ...p, forecast_month: e.target.value }))} />
+        </td>
+        <td><input type="number" min="0" step="1" className="form-input text-right" value={draft.count} onChange={e => setDraft(p => ({ ...p, count: e.target.value }))} /></td>
+        <td><input type="number" step="1000" className="form-input text-right" value={draft.max_amount_per_loan} onChange={e => setDraft(p => ({ ...p, max_amount_per_loan: e.target.value }))} /></td>
+        <td><input className="form-input" value={draft.notes} onChange={e => setDraft(p => ({ ...p, notes: e.target.value }))} /></td>
+        <td>
+          <div className="flex items-center gap-1 justify-end">
+            <button onClick={() => setEditing(false)} className="btn-secondary">Cancel</button>
+            <button onClick={save} className="btn-primary"><Save className="w-3.5 h-3.5" /></button>
+          </div>
+        </td>
+      </tr>
+    )
+  }
+
+  return (
+    <tr>
+      <td>{builderName}</td>
+      <td className="text-[#C9D1D9] font-medium">{programName}</td>
+      <td>{monthLabel}</td>
+      <td className="num">{row.count}</td>
+      <td className="num">${Number(row.max_amount_per_loan).toLocaleString()}</td>
+      <td className="text-[10px] max-w-xs truncate">{row.notes || '—'}</td>
       <td>
         <div className="flex items-center gap-1 justify-end">
           <button onClick={() => setEditing(true)} className="btn-ghost"><Pencil className="w-3 h-3" /></button>

@@ -1,214 +1,345 @@
 import { addMonths, format, parseISO, differenceInMonths } from 'date-fns'
-import { Loan, Assumptions, MonthlyBalance, ForecastResult } from './types'
+import {
+  Loan,
+  LoanType,
+  ProductType,
+  LoanProgram,
+  Builder,
+  LandBucketProject,
+  ForecastSettings,
+  LandBucketMonth,
+  LandBucketProjectSchedule,
+  MonthlyBalance,
+  ForecastResult,
+} from './types'
 
-const MONTHS_FORWARD = 17
+// Vertical loan amount = lot_price × this multiple. Quick default until the
+// per-project / per-builder size is wired through the schema.
+const DEFAULT_LOT_TO_VERTICAL_MULTIPLE = 3.0
 
-function monthKey(date: Date): string {
-  return format(date, 'yyyy-MM')
+const LOAN_TYPE_TO_PRODUCT_TYPE: Record<LoanType, ProductType> = {
+  SFR: 'SF',
+  MFR: 'MF',
+  'A&D': 'AD',
+  RAW_LAND: 'RAW_LAND',
+  FINISHED_LOTS: 'LOT',
+  HHH: 'OTHER',
+  UNKNOWN: 'OTHER',
 }
 
-function monthLabel(date: Date): string {
-  return format(date, 'MMM yy')
+type Segment = 'sfr' | 'mfr' | 'raw_land' | 'and' | 'finished_lots' | 'hhh'
+
+const PRODUCT_TYPE_TO_SEGMENT: Record<ProductType, Segment> = {
+  SF: 'sfr',
+  MF: 'mfr',
+  LOT: 'finished_lots',
+  AD: 'and',
+  RAW_LAND: 'raw_land',
+  OTHER: 'hhh',
 }
 
-// Ramp a loan's balance from its current projected balance down to 0
-// over the remaining months until its due date
-function projectLoanBalance(
+interface MonthSpec {
+  date: Date
+  key: string
+  label: string
+}
+
+function generateMonths(start: Date, count: number): MonthSpec[] {
+  return Array.from({ length: count }, (_, i) => {
+    const d = addMonths(start, i)
+    return { date: d, key: format(d, 'yyyy-MM'), label: format(d, 'MMM yy') }
+  })
+}
+
+function cumulativeDraw(curve: number[], ageMonths: number): number {
+  if (ageMonths < 0 || curve.length === 0) return 0
+  const upto = Math.min(curve.length, ageMonths + 1)
+  let sum = 0
+  for (let i = 0; i < upto; i++) sum += curve[i]
+  return Math.min(sum, 1)
+}
+
+function programForLoanType(programs: LoanProgram[], loanType: LoanType): LoanProgram | null {
+  const pt = LOAN_TYPE_TO_PRODUCT_TYPE[loanType] ?? 'OTHER'
+  return programs.find(p => p.product_type === pt) ?? null
+}
+
+// ─── Module 1: Land Bucket Engine ────────────────────────────────────────────
+
+interface LotOrigination {
+  origination_month_idx: number
+  count: number
+  max_amount_per_loan: number
+  program: LoanProgram
+  project_id: string
+}
+
+interface LandBucketRunResult {
+  schedules: LandBucketProjectSchedule[]
+  lotOriginations: LotOrigination[]
+  totals: LandBucketMonth[]
+}
+
+function runLandBucket(
+  projects: LandBucketProject[],
+  buildersById: Map<string, Builder>,
+  programsById: Map<string, LoanProgram>,
+  months: MonthSpec[],
+): LandBucketRunResult {
+  const schedules: LandBucketProjectSchedule[] = []
+  const lotOriginations: LotOrigination[] = []
+  const totals: LandBucketMonth[] = months.map(m => ({
+    month: m.key,
+    label: m.label,
+    lots_sold: 0,
+    lots_sold_cumulative: 0,
+    lots_remaining: 0,
+    sale_proceeds: 0,
+    ending_balance: 0,
+    interest_income: 0,
+    new_vertical_origs_count: 0,
+    new_vertical_origs_amount: 0,
+  }))
+
+  for (const project of projects) {
+    const builder = project.builder_id ? buildersById.get(project.builder_id) ?? null : null
+    const absorption = project.absorption_rate ?? builder?.default_absorption_rate ?? 0
+    const lotSalesStart = project.lot_sales_start_date ? parseISO(project.lot_sales_start_date) : null
+    const verticalProgram = project.vertical_loan_program_id
+      ? programsById.get(project.vertical_loan_program_id) ?? null
+      : null
+
+    const monthly: LandBucketMonth[] = []
+    let balance = project.balance_outstanding
+    let lotsSoldCum = 0
+    let absorptionAccum = 0
+
+    for (let i = 0; i < months.length; i++) {
+      const { date: monthDate, key, label } = months[i]
+      const lotsRemaining = Math.max(0, project.total_lots - lotsSoldCum)
+
+      // Interest computed on starting balance — fixed rate, paid current.
+      const interestIncome = balance * project.interest_rate / 12
+
+      let lotsThisMonth = 0
+      if (lotSalesStart && monthDate >= lotSalesStart && lotsRemaining > 0 && absorption > 0) {
+        absorptionAccum += absorption
+        lotsThisMonth = Math.min(Math.floor(absorptionAccum), lotsRemaining)
+        absorptionAccum -= lotsThisMonth
+        lotsSoldCum += lotsThisMonth
+      }
+
+      const proceeds = lotsThisMonth * project.lot_price
+      balance = Math.max(0, balance - proceeds)
+
+      let newOrigsCount = 0
+      let newOrigsAmount = 0
+      if (lotsThisMonth > 0 && verticalProgram) {
+        const amountPerLoan = project.lot_price * DEFAULT_LOT_TO_VERTICAL_MULTIPLE
+        lotOriginations.push({
+          origination_month_idx: i,
+          count: lotsThisMonth,
+          max_amount_per_loan: amountPerLoan,
+          program: verticalProgram,
+          project_id: project.id,
+        })
+        newOrigsCount = lotsThisMonth
+        newOrigsAmount = lotsThisMonth * amountPerLoan
+      }
+
+      monthly.push({
+        month: key,
+        label,
+        lots_sold: lotsThisMonth,
+        lots_sold_cumulative: lotsSoldCum,
+        lots_remaining: project.total_lots - lotsSoldCum,
+        sale_proceeds: proceeds,
+        ending_balance: balance,
+        interest_income: interestIncome,
+        new_vertical_origs_count: newOrigsCount,
+        new_vertical_origs_amount: newOrigsAmount,
+      })
+
+      const t = totals[i]
+      t.lots_sold += lotsThisMonth
+      t.lots_sold_cumulative += lotsSoldCum
+      t.lots_remaining += project.total_lots - lotsSoldCum
+      t.sale_proceeds += proceeds
+      t.ending_balance += balance
+      t.interest_income += interestIncome
+      t.new_vertical_origs_count += newOrigsCount
+      t.new_vertical_origs_amount += newOrigsAmount
+    }
+
+    schedules.push({
+      project_id: project.id,
+      project_name: project.name,
+      builder_name: builder?.name ?? null,
+      total_lots: project.total_lots,
+      lot_price: project.lot_price,
+      absorption_rate: absorption,
+      months: monthly,
+    })
+  }
+
+  return { schedules, lotOriginations, totals }
+}
+
+// ─── Module 2: Vertical Loan Engine ──────────────────────────────────────────
+
+// Existing portfolio loan: ramp balance per its program's draw curve based on
+// age since funding. Zero after maturity. No program / unknown type → hold at
+// max until maturity.
+function projectExistingLoanBalance(
   loan: Loan,
   monthDate: Date,
-  drawPct: number
+  programs: LoanProgram[],
+  startDate: Date,
 ): number {
-  const projected = loan.projected_balance
-  if (projected <= 0) return 0
-
-  if (!loan.current_loan_due_date) {
-    // No due date: use projected balance flat for 6 months then wind down
-    const asOf = new Date()
-    const diff  = differenceInMonths(monthDate, asOf)
-    if (diff <= 0) return projected
-    if (diff >= 12) return 0
-    return projected * (1 - diff / 12)
+  if (loan.current_loan_due_date) {
+    const dueDate = parseISO(loan.current_loan_due_date)
+    if (monthDate >= dueDate) return 0
   }
 
-  const dueDate = parseISO(loan.current_loan_due_date)
-  const today   = new Date()
+  const maxAmount = Math.max(
+    loan.projected_balance,
+    loan.current_loan_amount,
+    loan.loan_amount_disbursed,
+  )
+  if (maxAmount <= 0) return 0
 
-  if (monthDate >= dueDate) return 0
+  const program = programForLoanType(programs, loan.loan_type)
+  if (!program || program.draw_curve.length === 0) return maxAmount
 
-  const totalMonths     = Math.max(1, differenceInMonths(dueDate, today))
-  const monthsRemaining = Math.max(0, differenceInMonths(dueDate, monthDate))
-
-  // Linear wind-down from projected balance
-  return projected * (monthsRemaining / totalMonths)
+  const fundedDate = loan.loan_funded_date ? parseISO(loan.loan_funded_date) : startDate
+  const age = differenceInMonths(monthDate, fundedDate)
+  return maxAmount * cumulativeDraw(program.draw_curve, age)
 }
 
-// NHCF: new origination forecast for a builder/type
-// Returns net new balance added each month (new loans minus payoffs)
-function calcNhcfBalances(
-  assumptions: Assumptions,
-  startDate: Date
-): { sfr: number[]; mfr: number[] } {
-  const sfrBalances = new Array(MONTHS_FORWARD).fill(0)
-  const mfrBalances = new Array(MONTHS_FORWARD).fill(0)
-
-  const drawPctSf = assumptions.draw_pct_sf
-  const drawPctMf = assumptions.draw_pct_mf
-
-  // Running cumulative balances per builder
-  const builderBalances: Record<string, { sf: number; mf: number }> = {}
-
-  for (const builderKey of Object.keys(assumptions.nhcf_loan_counts)) {
-    builderBalances[builderKey] = { sf: 0, mf: 0 }
-    const sizes   = assumptions.nhcf_loan_sizes[builderKey]   || { sf: 0, mf: 0 }
-    const counts  = assumptions.nhcf_loan_counts[builderKey]  || {}
-    const payoffs = assumptions.nhcf_payoff_counts[builderKey] || {}
-
-    const isMfBuilder = builderKey.includes('mfr') || builderKey.includes('holmes_mfr')
-
-    for (let m = 0; m < MONTHS_FORWARD; m++) {
-      const newLoans  = counts[String(m)]  || 0
-      const paidOff   = payoffs[String(m)] || 0
-
-      if (isMfBuilder) {
-        builderBalances[builderKey].mf += newLoans * sizes.mf * drawPctMf
-        builderBalances[builderKey].mf -= paidOff * sizes.mf
-        builderBalances[builderKey].mf  = Math.max(0, builderBalances[builderKey].mf)
-        mfrBalances[m] += builderBalances[builderKey].mf
-      } else {
-        builderBalances[builderKey].sf += newLoans * sizes.sf * drawPctSf
-        builderBalances[builderKey].sf -= paidOff * sizes.sf
-        builderBalances[builderKey].sf  = Math.max(0, builderBalances[builderKey].sf)
-        sfrBalances[m] += builderBalances[builderKey].sf
-      }
-    }
-  }
-
-  return { sfr: sfrBalances, mfr: mfrBalances }
+// Lot-driven origination cohort balance at month index `m`.
+function lotOriginationBalance(orig: LotOrigination, m: number): number {
+  const age = m - orig.origination_month_idx
+  if (age < 0) return 0
+  if (age >= orig.program.default_term_months) return 0
+  return orig.count * orig.max_amount_per_loan * cumulativeDraw(orig.program.draw_curve, age)
 }
 
-// Land Bucket: development cost build-out minus lot releases
-function calcLandBucketBalance(assumptions: Assumptions, monthDate: Date): number {
-  let totalBalance = 0
+// ─── Orchestrator ────────────────────────────────────────────────────────────
 
-  for (const dev of assumptions.land_bucket) {
-    const startDate      = parseISO(dev.start_date)
-    const completionDate = parseISO(dev.completion_date)
-    const releaseStart   = parseISO(dev.lot_release_start)
-
-    if (monthDate < startDate) continue
-
-    const totalCost = dev.land_costs + dev.dev_costs + dev.interest
-
-    if (monthDate < completionDate) {
-      // Under development: linear build-up
-      const totalBuildMonths = Math.max(1, differenceInMonths(completionDate, startDate))
-      const elapsed          = differenceInMonths(monthDate, startDate)
-      totalBalance += totalCost * Math.min(elapsed / totalBuildMonths, 1)
-    } else {
-      // Completed: releasing lots
-      const lotsReleased = Math.max(
-        0,
-        differenceInMonths(monthDate, releaseStart)
-      )
-      const remainingLots  = Math.max(0, dev.lots - lotsReleased)
-      const costPerLot     = totalCost / dev.lots
-      totalBalance += remainingLots * costPerLot
-    }
-  }
-
-  return Math.max(0, totalBalance)
-}
-
-// Profit sharing income for the month
-function calcProfitSharing(assumptions: Assumptions, monthIndex: number): number {
-  let total = 0
-  const units = assumptions.ps_unit_counts
-
-  for (const [builderKey, monthMap] of Object.entries(units)) {
-    const monthUnits = monthMap[String(monthIndex)] || 0
-    if (builderKey.includes('holmes')) {
-      total += monthUnits * assumptions.ps_holmes_sfr
-    } else if (builderKey.includes('arive')) {
-      total += monthUnits * assumptions.ps_arive_sfr
-    }
-  }
-  return total
-}
-
-export function runForecast(
-  loans: Loan[],
-  assumptions: Assumptions,
-  versionLabel: string,
+export interface ForecastInput {
+  loans: Loan[]
+  landBucketProjects: LandBucketProject[]
+  builders: Builder[]
+  loanPrograms: LoanProgram[]
+  settings: ForecastSettings
+  versionLabel: string
   asOfDate: string
-): ForecastResult {
-  const startDate = new Date()
-  startDate.setDate(1) // First of current month
+}
 
-  // Group current loans by type
-  const loansByType = {
-    SFR:           loans.filter(l => l.loan_type === 'SFR'),
-    MFR:           loans.filter(l => l.loan_type === 'MFR'),
-    RAW_LAND:      loans.filter(l => l.loan_type === 'RAW_LAND'),
-    'A&D':         loans.filter(l => l.loan_type === 'A&D'),
-    FINISHED_LOTS: loans.filter(l => l.loan_type === 'FINISHED_LOTS'),
-    HHH:           loans.filter(l => l.loan_type === 'HHH'),
+export function runForecast(input: ForecastInput): ForecastResult {
+  const startDate = parseISO(input.settings.start_date)
+  const months = generateMonths(startDate, input.settings.horizon_months)
+
+  const buildersById = new Map(input.builders.map(b => [b.id, b]))
+  const programsById = new Map(input.loanPrograms.map(p => [p.id, p]))
+
+  const lb = runLandBucket(input.landBucketProjects, buildersById, programsById, months)
+
+  const loansByType: Record<LoanType, Loan[]> = {
+    SFR: [],
+    MFR: [],
+    RAW_LAND: [],
+    'A&D': [],
+    FINISHED_LOTS: [],
+    HHH: [],
+    UNKNOWN: [],
   }
+  for (const l of input.loans) loansByType[l.loan_type].push(l)
 
-  const currentBalances = {
-    sfr:           loansByType.SFR.reduce((s, l)           => s + l.projected_balance, 0),
-    mfr:           loansByType.MFR.reduce((s, l)           => s + l.projected_balance, 0),
-    raw_land:      loansByType.RAW_LAND.reduce((s, l)      => s + l.projected_balance, 0),
-    and:           loansByType['A&D'].reduce((s, l)         => s + l.projected_balance, 0),
-    finished_lots: loansByType.FINISHED_LOTS.reduce((s, l) => s + l.projected_balance, 0),
-    hhh:           loansByType.HHH.reduce((s, l)           => s + l.projected_balance, 0),
-    total:         0,
-  }
-  currentBalances.total = Object.values(currentBalances).reduce((a, b) => a + b, 0) - currentBalances.total
+  const monthly: MonthlyBalance[] = []
+  let prevTotalAll = 0
+  const prevExistingBalances = new Map<string, number>()
 
-  // NHCF new origination forecasts
-  const nhcf = calcNhcfBalances(assumptions, startDate)
+  for (let i = 0; i < months.length; i++) {
+    const m = months[i]
 
-  const months: MonthlyBalance[] = []
-  let prevTotal = 0
+    const sumExisting = (loans: Loan[]) =>
+      loans.reduce((s, l) => s + projectExistingLoanBalance(l, m.date, input.loanPrograms, startDate), 0)
 
-  for (let m = 0; m < MONTHS_FORWARD; m++) {
-    const monthDate = addMonths(startDate, m)
+    const sfr_existing = sumExisting(loansByType.SFR)
+    const mfr_existing = sumExisting(loansByType.MFR)
+    const and_existing = sumExisting(loansByType['A&D'])
+    const raw_existing = sumExisting(loansByType.RAW_LAND)
+    const fl_existing = sumExisting(loansByType.FINISHED_LOTS)
+    const hhh_existing = sumExisting(loansByType.HHH) + sumExisting(loansByType.UNKNOWN)
 
-    // Active loan balances (wind-down existing portfolio)
-    const sfr           = loansByType.SFR.reduce((s, l)           => s + projectLoanBalance(l, monthDate, assumptions.draw_pct_sf),  0)
-    const mfr           = loansByType.MFR.reduce((s, l)           => s + projectLoanBalance(l, monthDate, assumptions.draw_pct_mf),  0)
-    const raw_land      = loansByType.RAW_LAND.reduce((s, l)      => s + projectLoanBalance(l, monthDate, assumptions.draw_pct_active), 0)
-    const and           = loansByType['A&D'].reduce((s, l)         => s + projectLoanBalance(l, monthDate, assumptions.draw_pct_active), 0)
-    const finished_lots = loansByType.FINISHED_LOTS.reduce((s, l) => s + projectLoanBalance(l, monthDate, assumptions.draw_pct_active), 0)
-    const hhh           = loansByType.HHH.reduce((s, l)           => s + projectLoanBalance(l, monthDate, assumptions.draw_pct_active), 0)
+    // Lot-driven new originations distributed by program product_type
+    const newBySegment: Record<Segment, number> = {
+      sfr: 0, mfr: 0, raw_land: 0, and: 0, finished_lots: 0, hhh: 0,
+    }
+    for (const orig of lb.lotOriginations) {
+      const bal = lotOriginationBalance(orig, i)
+      if (bal === 0) continue
+      newBySegment[PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]] += bal
+    }
 
-    // Land Bucket
-    const land_bucket = calcLandBucketBalance(assumptions, monthDate)
+    const sfr = sfr_existing + newBySegment.sfr
+    const mfr = mfr_existing + newBySegment.mfr
+    const and = and_existing + newBySegment.and
+    const raw_land = raw_existing + newBySegment.raw_land
+    const finished_lots = fl_existing + newBySegment.finished_lots
+    const hhh = hhh_existing + newBySegment.hhh
 
-    // NHCF forecasted new
-    const forecasted_sfr = nhcf.sfr[m] || 0
-    const forecasted_mfr = nhcf.mfr[m] || 0
+    const land_bucket = lb.totals[i].ending_balance
+    const total_loans = sfr + mfr + and + raw_land + finished_lots + hhh
+    const total_all = total_loans + land_bucket
 
-    const total_loans = sfr + mfr + raw_land + and + finished_lots + hhh
-    const total_all   = total_loans + land_bucket + forecasted_sfr + forecasted_mfr
-
-    // Yield / income calculations (matches Excel Summary rows 47-54)
-    const rate_active = 0.0525 // 5.25% flat on active loans
-    const yield_active      = total_loans      * (rate_active                       / 12)
-    const yield_projected   = (forecasted_sfr + forecasted_mfr) * (assumptions.rate_projected_loans / 12)
-    const yield_land_bucket = land_bucket      * (assumptions.rate_land_bucket      / 12)
-    const profit_sharing    = calcProfitSharing(assumptions, m)
-    const total_income      = yield_active + yield_projected + yield_land_bucket + profit_sharing
-
-    // Annualized yield
+    // Income: per-loan rate where available, program default for new cohorts
+    let yield_active = 0
+    for (const loan of input.loans) {
+      const bal = projectExistingLoanBalance(loan, m.date, input.loanPrograms, startDate)
+      const rate = loan.current_interest_rate > 0 ? loan.current_interest_rate : input.settings.default_rate_vertical
+      yield_active += bal * rate / 12
+    }
+    let yield_projected = 0
+    for (const orig of lb.lotOriginations) {
+      yield_projected += lotOriginationBalance(orig, i) * orig.program.default_rate / 12
+    }
+    const yield_land_bucket = lb.totals[i].interest_income
+    const total_income = yield_active + yield_projected + yield_land_bucket
     const annualized_yield_pct = total_all > 0 ? (total_income / total_all) * 12 : 0
 
-    const variance = m === 0 ? 0 : total_all - prevTotal
-    prevTotal = total_all
+    // Payoff detection: existing loan whose balance transitioned to 0
+    let payoffs_count = 0
+    let payoffs_amount = 0
+    for (const loan of input.loans) {
+      const key = loan.id ?? loan.loan_number
+      const curr = projectExistingLoanBalance(loan, m.date, input.loanPrograms, startDate)
+      const prev = prevExistingBalances.get(key) ?? 0
+      if (i > 0 && prev > 0 && curr === 0) {
+        payoffs_count += 1
+        payoffs_amount += prev
+      }
+      prevExistingBalances.set(key, curr)
+    }
+    // Lot-driven cohorts: pay off when age == term
+    for (const orig of lb.lotOriginations) {
+      if (i - orig.origination_month_idx === orig.program.default_term_months) {
+        payoffs_count += orig.count
+        payoffs_amount += orig.count * orig.max_amount_per_loan
+      }
+    }
 
-    months.push({
-      month:               monthKey(monthDate),
-      label:               monthLabel(monthDate),
+    // Net new draws this month = positive change in total vertical balance
+    const draws = i === 0 ? 0 : Math.max(0, total_loans - (monthly[i - 1].total_loans))
+    const cash_flow = total_income + payoffs_amount + lb.totals[i].sale_proceeds - draws
+
+    const variance = i === 0 ? 0 : total_all - prevTotalAll
+    prevTotalAll = total_all
+
+    monthly.push({
+      month: m.key,
+      label: m.label,
       sfr,
       mfr,
       raw_land,
@@ -219,24 +350,41 @@ export function runForecast(
       total_loans,
       total_all,
       variance,
-      new_originations_sfr: 0,
-      new_originations_mfr: 0,
-      forecasted_sfr,
-      forecasted_mfr,
+      new_originations_sfr: newBySegment.sfr,
+      new_originations_mfr: newBySegment.mfr,
+      forecasted_sfr: newBySegment.sfr,
+      forecasted_mfr: newBySegment.mfr,
       yield_active,
       yield_projected,
       yield_land_bucket,
-      profit_sharing,
+      profit_sharing: 0,
       total_income,
       annualized_yield_pct,
+      lots_sold: lb.totals[i].lots_sold,
+      lot_sale_proceeds: lb.totals[i].sale_proceeds,
+      new_originations_count: lb.totals[i].new_vertical_origs_count,
+      new_originations_amount: lb.totals[i].new_vertical_origs_amount,
+      payoffs_count,
+      payoffs_amount,
+      cash_flow,
     })
   }
 
+  const m0 = monthly[0]
   return {
-    months,
-    as_of_date:        asOfDate,
-    version_label:     versionLabel,
-    total_active_loans: loans.length,
-    current_balances:  currentBalances,
+    months: monthly,
+    as_of_date: input.asOfDate,
+    version_label: input.versionLabel,
+    total_active_loans: input.loans.length,
+    current_balances: {
+      sfr: m0.sfr,
+      mfr: m0.mfr,
+      raw_land: m0.raw_land,
+      and: m0.and,
+      finished_lots: m0.finished_lots,
+      hhh: m0.hhh,
+      total: m0.total_all,
+    },
+    land_bucket_schedules: lb.schedules,
   }
 }

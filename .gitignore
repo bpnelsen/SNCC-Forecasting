@@ -18,8 +18,18 @@ node_modules/
 dist/
 .cache/
 
+# Next.js
+.next/
+out/
+next-env.d.ts.bak
+
+# Vercel
+.vercel
+
 # Misc
 .DS_Store
 *.log
 .env
 .env.local
+.env*.local
+*.tsbuildinfo

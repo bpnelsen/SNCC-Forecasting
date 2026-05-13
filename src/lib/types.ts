@@ -157,6 +157,7 @@ export interface LandBucketProject {
   dev_end_date: string | null
   lot_sales_start_date: string | null
   vertical_loan_program_id: string | null
+  vertical_loan_amount: number | null
   notes: string | null
 }
 

@@ -12,6 +12,7 @@ export function pickLandBucketPayload(body: Record<string, unknown>) {
     dev_end_date:              body.dev_end_date || null,
     lot_sales_start_date:      body.lot_sales_start_date || null,
     vertical_loan_program_id:  body.vertical_loan_program_id || null,
+    vertical_loan_amount:      num(body.vertical_loan_amount),
     notes:                     body.notes ? String(body.notes) : null,
   }
 }

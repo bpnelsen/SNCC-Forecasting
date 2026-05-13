@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from 'react'
 import { LandBucketProject, Builder, LoanProgram } from '@/lib/types'
+import { formatCurrency } from '@/lib/utils'
 import { X, Save, Trash2, AlertCircle } from 'lucide-react'
+
+const formatNumber = (n: number) => formatCurrency(n, true)
 
 type Mode = { kind: 'create' } | { kind: 'edit'; project: LandBucketProject }
 
@@ -26,6 +29,7 @@ interface FormState {
   dev_end_date: string
   lot_sales_start_date: string
   vertical_loan_program_id: string
+  vertical_loan_amount: string
   notes: string
 }
 
@@ -43,6 +47,7 @@ function initial(mode: Mode): FormState {
       dev_end_date: '',
       lot_sales_start_date: '',
       vertical_loan_program_id: '',
+      vertical_loan_amount: '',
       notes: '',
     }
   }
@@ -59,6 +64,7 @@ function initial(mode: Mode): FormState {
     dev_end_date: p.dev_end_date ?? '',
     lot_sales_start_date: p.lot_sales_start_date ?? '',
     vertical_loan_program_id: p.vertical_loan_program_id ?? '',
+    vertical_loan_amount: p.vertical_loan_amount == null ? '' : String(p.vertical_loan_amount),
     notes: p.notes ?? '',
   }
 }
@@ -79,6 +85,7 @@ export function ProjectModal({ mode, builders, programs, onClose, onSaved }: Pro
         ...form,
         builder_id: form.builder_id || null,
         vertical_loan_program_id: form.vertical_loan_program_id || null,
+        vertical_loan_amount: form.vertical_loan_amount === '' ? null : Number(form.vertical_loan_amount),
         interest_rate: form.interest_rate ? Number(form.interest_rate) / 100 : 0.0525,
       }
       const url = mode.kind === 'create'
@@ -116,6 +123,7 @@ export function ProjectModal({ mode, builders, programs, onClose, onSaved }: Pro
   }, [onClose])
 
   const builderDefault = builders.find(b => b.id === form.builder_id)?.default_absorption_rate
+  const verticalFallback = form.lot_price ? Number(form.lot_price) * 3 : null
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
@@ -159,6 +167,24 @@ export function ProjectModal({ mode, builders, programs, onClose, onSaved }: Pro
               </select>
             </Field>
           </div>
+
+          <Field
+            label="Vertical Loan Amount ($)"
+            hint={
+              form.vertical_loan_program_id
+                ? `Max balance of each lot-driven vertical loan. Leave blank for default (lot_price × 3${verticalFallback ? ` = ${formatNumber(verticalFallback)}` : ''}).`
+                : 'Only used when a Vertical Loan Program is selected above.'
+            }
+          >
+            <input
+              type="number" step="1000"
+              className="form-input"
+              value={form.vertical_loan_amount}
+              onChange={e => set('vertical_loan_amount', e.target.value)}
+              placeholder={verticalFallback ? formatNumber(verticalFallback) : ''}
+              disabled={!form.vertical_loan_program_id}
+            />
+          </Field>
 
           <div className="grid grid-cols-3 gap-3">
             <Field label="Total Lots" required>

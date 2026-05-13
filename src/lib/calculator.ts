@@ -13,8 +13,7 @@ import {
   ForecastResult,
 } from './types'
 
-// Vertical loan amount = lot_price × this multiple. Quick default until the
-// per-project / per-builder size is wired through the schema.
+// Fallback when a project doesn't set vertical_loan_amount: lot_price × this.
 const DEFAULT_LOT_TO_VERTICAL_MULTIPLE = 3.0
 
 const LOAN_TYPE_TO_PRODUCT_TYPE: Record<LoanType, ProductType> = {
@@ -135,7 +134,7 @@ function runLandBucket(
       let newOrigsCount = 0
       let newOrigsAmount = 0
       if (lotsThisMonth > 0 && verticalProgram) {
-        const amountPerLoan = project.lot_price * DEFAULT_LOT_TO_VERTICAL_MULTIPLE
+        const amountPerLoan = project.vertical_loan_amount ?? project.lot_price * DEFAULT_LOT_TO_VERTICAL_MULTIPLE
         lotOriginations.push({
           origination_month_idx: i,
           count: lotsThisMonth,

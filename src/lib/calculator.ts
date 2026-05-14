@@ -108,6 +108,8 @@ function runLandBucket(
     const verticalProgram = project.vertical_loan_program_id
       ? programsById.get(project.vertical_loan_program_id) ?? null
       : null
+    const manualSchedule = project.lot_release_schedule ?? {}
+    const hasManualSchedule = Object.keys(manualSchedule).length > 0
 
     const monthly: LandBucketMonth[] = []
     let balance = project.balance_outstanding
@@ -122,7 +124,11 @@ function runLandBucket(
       const interestIncome = balance * project.interest_rate / 12
 
       let lotsThisMonth = 0
-      if (lotSalesStart && monthDate >= lotSalesStart && lotsRemaining > 0 && absorption > 0) {
+      if (hasManualSchedule) {
+        const requested = Math.max(0, Math.floor(Number(manualSchedule[key]) || 0))
+        lotsThisMonth = Math.min(requested, lotsRemaining)
+        lotsSoldCum += lotsThisMonth
+      } else if (lotSalesStart && monthDate >= lotSalesStart && lotsRemaining > 0 && absorption > 0) {
         absorptionAccum += absorption
         lotsThisMonth = Math.min(Math.floor(absorptionAccum), lotsRemaining)
         absorptionAccum -= lotsThisMonth
@@ -135,7 +141,9 @@ function runLandBucket(
       let newOrigsCount = 0
       let newOrigsAmount = 0
       if (lotsThisMonth > 0 && verticalProgram) {
-        const amountPerLoan = project.lot_price * DEFAULT_LOT_TO_VERTICAL_MULTIPLE
+        const amountPerLoan = project.vertical_loan_amount != null && project.vertical_loan_amount > 0
+          ? project.vertical_loan_amount
+          : project.lot_price * DEFAULT_LOT_TO_VERTICAL_MULTIPLE
         lotOriginations.push({
           origination_month_idx: i,
           count: lotsThisMonth,

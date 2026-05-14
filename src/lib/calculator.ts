@@ -1,4 +1,4 @@
-import { addMonths, format, parseISO, differenceInMonths } from 'date-fns'
+import { addMonths, format, parseISO } from 'date-fns'
 import {
   Loan,
   LoanType,
@@ -16,16 +16,6 @@ import {
 // Vertical loan amount = lot_price × this multiple. Quick default until the
 // per-project / per-builder size is wired through the schema.
 const DEFAULT_LOT_TO_VERTICAL_MULTIPLE = 3.0
-
-const LOAN_TYPE_TO_PRODUCT_TYPE: Record<LoanType, ProductType> = {
-  SFR: 'SF',
-  MFR: 'MF',
-  'A&D': 'AD',
-  RAW_LAND: 'RAW_LAND',
-  FINISHED_LOTS: 'LOT',
-  HHH: 'OTHER',
-  UNKNOWN: 'OTHER',
-}
 
 type Segment = 'sfr' | 'mfr' | 'raw_land' | 'and' | 'finished_lots' | 'hhh'
 
@@ -57,11 +47,6 @@ function cumulativeDraw(curve: number[], ageMonths: number): number {
   let sum = 0
   for (let i = 0; i < upto; i++) sum += curve[i]
   return Math.min(sum, 1)
-}
-
-function programForLoanType(programs: LoanProgram[], loanType: LoanType): LoanProgram | null {
-  const pt = LOAN_TYPE_TO_PRODUCT_TYPE[loanType] ?? 'OTHER'
-  return programs.find(p => p.product_type === pt) ?? null
 }
 
 // ─── Module 1: Land Bucket Engine ────────────────────────────────────────────
@@ -195,14 +180,20 @@ function runLandBucket(
 
 // ─── Module 2: Vertical Loan Engine ──────────────────────────────────────────
 
-// Existing portfolio loan: ramp balance per its program's draw curve based on
-// age since funding. Zero after maturity. No program / unknown type → hold at
-// max until maturity.
+// Existing portfolio loan balance for a given forecast month.
+//
+// Every loan contributes its actual recorded max balance to the portfolio
+// regardless of builder, loan program, or funded date. We don't synthesize
+// a draw curve on top of an existing loan that already has a real balance on
+// the books — the draw curve is for brand-new cohorts originated from land
+// bucket lot sales, which legitimately start at $0 and ramp.
+//
+// Returns 0 once the loan matures (monthDate >= current_loan_due_date).
 function projectExistingLoanBalance(
   loan: Loan,
   monthDate: Date,
-  programs: LoanProgram[],
-  startDate: Date,
+  _programs: LoanProgram[],
+  _startDate: Date,
 ): number {
   if (loan.current_loan_due_date) {
     const dueDate = parseISO(loan.current_loan_due_date)
@@ -214,14 +205,7 @@ function projectExistingLoanBalance(
     loan.current_loan_amount,
     loan.loan_amount_disbursed,
   )
-  if (maxAmount <= 0) return 0
-
-  const program = programForLoanType(programs, loan.loan_type)
-  if (!program || program.draw_curve.length === 0) return maxAmount
-
-  const fundedDate = loan.loan_funded_date ? parseISO(loan.loan_funded_date) : startDate
-  const age = differenceInMonths(monthDate, fundedDate)
-  return maxAmount * cumulativeDraw(program.draw_curve, age)
+  return maxAmount > 0 ? maxAmount : 0
 }
 
 // Lot-driven origination cohort balance at month index `m`.

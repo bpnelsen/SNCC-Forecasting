@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { parseCurrentReport } from '@/lib/parser'
+import { parseCurrentReportWithDiagnostics } from '@/lib/parser'
 
 export async function POST(req: NextRequest) {
   try {
@@ -12,10 +12,27 @@ export async function POST(req: NextRequest) {
     if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
 
     const buffer = Buffer.from(await file.arrayBuffer())
-    const loans  = parseCurrentReport(buffer)
+    const { loans, diagnostics } = parseCurrentReportWithDiagnostics(buffer)
 
     if (loans.length === 0) {
-      return NextResponse.json({ error: 'No loans found. Check that the file has a sheet with a header row containing "Borrower" and the expected loan columns.' }, { status: 422 })
+      const lines: string[] = [
+        'No loans found. Diagnostics:',
+        `- Sheets in workbook: ${diagnostics.sheet_names.join(', ') || '(none)'}`,
+        `- Sheet chosen: ${diagnostics.chosen_sheet ?? '(none)'}`,
+        `- Header row found at spreadsheet row: ${
+          diagnostics.header_row_index === null ? '(not found)' : diagnostics.header_row_index + 1
+        }`,
+        `- Total rows in chosen sheet: ${diagnostics.total_rows}`,
+        `- Rows with a non-empty Loan Number: ${diagnostics.rows_with_loan_number}`,
+        `- Header row preview: ${
+          diagnostics.header_row_preview
+            ? JSON.stringify(diagnostics.header_row_preview)
+            : '(none)'
+        }`,
+        `- Loan Number column index (-1 = not detected): ${diagnostics.detected_columns.loan_number ?? -1}`,
+        `- Borrower column index (-1 = not detected): ${diagnostics.detected_columns.borrower ?? -1}`,
+      ]
+      return NextResponse.json({ error: lines.join('\n'), diagnostics }, { status: 422 })
     }
 
     const sb = createServiceClient()

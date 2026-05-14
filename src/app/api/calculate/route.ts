@@ -13,17 +13,46 @@ export async function GET() {
   try {
     const sb = createServiceClient()
 
-    const { data: version, error: ve } = await sb
+    // Don't use .single() here — it returns an error when the row count is 0
+    // or >1, which masks the underlying cause. Fetch the list, then disambiguate.
+    const { data: activeVersions, error: ve } = await sb
       .from('current_report_versions')
       .select('*')
       .eq('is_active', true)
-      .single()
 
-    if (ve || !version) {
+    if (ve) {
       return NextResponse.json({
-        error: 'No active version found. Please import a Current Report first.',
+        error: `Failed to query current_report_versions: ${ve.message}`,
+        details: ve,
+      }, { status: 500 })
+    }
+
+    if (!activeVersions || activeVersions.length === 0) {
+      // Surface total row count so the user can tell "no imports yet" apart from
+      // "imports exist but none are flagged active".
+      const { count: totalVersions } = await sb
+        .from('current_report_versions')
+        .select('*', { count: 'exact', head: true })
+      return NextResponse.json({
+        error: `No active version found (current_report_versions rows total = ${
+          totalVersions ?? 'unknown'
+        }, with is_active=true = 0). ${
+          totalVersions && totalVersions > 0
+            ? 'Versions exist but none are marked active — go to /versions and click Restore on the row you want.'
+            : 'Please import a Current Report first.'
+        }`,
+        total_versions: totalVersions ?? 0,
       }, { status: 404 })
     }
+
+    if (activeVersions.length > 1) {
+      return NextResponse.json({
+        error: `Multiple active versions found (${activeVersions.length}). The is_active unique index should prevent this — please archive duplicates.`,
+        active_version_ids: activeVersions.map(v => v.id),
+      }, { status: 500 })
+    }
+
+    const version = activeVersions[0]
 
     const { data: settings, error: se } = await sb
       .from('forecast_settings')
@@ -33,7 +62,8 @@ export async function GET() {
 
     if (se || !settings) {
       return NextResponse.json({
-        error: 'No active forecast settings. Run migration 002 and ensure one row has is_active=true.',
+        error: `No active forecast settings. Run supabase/migrations/002_modular_assumptions.sql and ensure one row in forecast_settings has is_active=true. Underlying error: ${se?.message ?? '(none)'}`,
+        details: se,
       }, { status: 500 })
     }
 

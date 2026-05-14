@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
     const loans  = parseCurrentReport(buffer)
 
     if (loans.length === 0) {
-      return NextResponse.json({ error: 'No loans found. Check that the file has a "Current Report" sheet.' }, { status: 422 })
+      return NextResponse.json({ error: 'No loans found. Check that the file has a sheet with a header row containing "Borrower" and the expected loan columns.' }, { status: 422 })
     }
 
     const sb = createServiceClient()

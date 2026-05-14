@@ -166,6 +166,17 @@ export interface LandBucketProject {
   notes: string | null
 }
 
+export interface NewOriginationEntry {
+  id: string
+  builder_id: string
+  land_bucket_project_id: string | null
+  month: string  // 'YYYY-MM'
+  loan_count: number
+  avg_loan_amount: number
+  loan_program_id: string | null
+  notes: string | null
+}
+
 export interface ForecastSettings {
   id: string
   start_date: string

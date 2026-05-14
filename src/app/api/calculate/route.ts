@@ -7,6 +7,7 @@ import {
   Builder,
   LandBucketProject,
   ForecastSettings,
+  NewOriginationEntry,
 } from '@/lib/types'
 
 export async function GET() {
@@ -67,23 +68,30 @@ export async function GET() {
       }, { status: 500 })
     }
 
-    const [loansRes, buildersRes, programsRes, projectsRes] = await Promise.all([
+    const [loansRes, buildersRes, programsRes, projectsRes, origsRes] = await Promise.all([
       sb.from('loans').select('*').eq('version_id', version.id),
       sb.from('builders').select('*'),
       sb.from('loan_programs').select('*'),
       sb.from('land_bucket_projects').select('*'),
+      sb.from('new_origination_schedule').select('*'),
     ])
 
     if (loansRes.error)    throw loansRes.error
     if (buildersRes.error) throw buildersRes.error
     if (programsRes.error) throw programsRes.error
     if (projectsRes.error) throw projectsRes.error
+    // Don't fail the whole forecast if new_origination_schedule isn't
+    // migrated yet — just treat it as an empty schedule.
+    const newOriginations: NewOriginationEntry[] = origsRes.error
+      ? []
+      : ((origsRes.data ?? []) as NewOriginationEntry[])
 
     const result = runForecast({
       loans:               (loansRes.data    ?? []) as Loan[],
       builders:            (buildersRes.data ?? []) as Builder[],
       loanPrograms:        (programsRes.data ?? []) as LoanProgram[],
       landBucketProjects:  (projectsRes.data ?? []) as LandBucketProject[],
+      newOriginations,
       settings:            settings as ForecastSettings,
       versionLabel:        version.label,
       asOfDate:            version.as_of_date || new Date().toISOString().split('T')[0],

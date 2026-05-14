@@ -11,6 +11,7 @@ import {
   LandBucketProjectSchedule,
   MonthlyBalance,
   ForecastResult,
+  NewOriginationEntry,
 } from './types'
 
 // Vertical loan amount = lot_price × this multiple. Quick default until the
@@ -223,6 +224,7 @@ export interface ForecastInput {
   landBucketProjects: LandBucketProject[]
   builders: Builder[]
   loanPrograms: LoanProgram[]
+  newOriginations: NewOriginationEntry[]
   settings: ForecastSettings
   versionLabel: string
   asOfDate: string
@@ -236,6 +238,33 @@ export function runForecast(input: ForecastInput): ForecastResult {
   const programsById = new Map(input.loanPrograms.map(p => [p.id, p]))
 
   const lb = runLandBucket(input.landBucketProjects, buildersById, programsById, months)
+  const monthIndexByKey = new Map(months.map((m, i) => [m.key, i]))
+
+  // Translate user-entered new origination schedule rows into the same cohort
+  // shape as land-bucket-driven originations. Each row becomes a cohort at its
+  // month with loan_count loans of avg_loan_amount each. Program resolution
+  // order: explicit loan_program_id on the row → builder.default_loan_program_id.
+  // If neither resolves we skip the row (no curve to draw against).
+  const scheduledOriginations: LotOrigination[] = []
+  for (const entry of input.newOriginations) {
+    if (entry.loan_count <= 0 || entry.avg_loan_amount <= 0) continue
+    const idx = monthIndexByKey.get(entry.month)
+    if (idx === undefined) continue  // outside forecast horizon
+    const programId = entry.loan_program_id
+      ?? buildersById.get(entry.builder_id)?.default_loan_program_id
+      ?? null
+    if (!programId) continue
+    const program = programsById.get(programId)
+    if (!program) continue
+    scheduledOriginations.push({
+      origination_month_idx: idx,
+      count: entry.loan_count,
+      max_amount_per_loan: entry.avg_loan_amount,
+      program,
+      project_id: entry.land_bucket_project_id ?? entry.id,
+    })
+  }
+  const allOriginations: LotOrigination[] = [...lb.lotOriginations, ...scheduledOriginations]
 
   const loansByType: Record<LoanType, Loan[]> = {
     SFR: [],
@@ -269,7 +298,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const newBySegment: Record<Segment, number> = {
       sfr: 0, mfr: 0, raw_land: 0, and: 0, finished_lots: 0, hhh: 0,
     }
-    for (const orig of lb.lotOriginations) {
+    for (const orig of allOriginations) {
       const bal = lotOriginationBalance(orig, i)
       if (bal === 0) continue
       newBySegment[PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]] += bal
@@ -294,7 +323,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
       yield_active += bal * rate / 12
     }
     let yield_projected = 0
-    for (const orig of lb.lotOriginations) {
+    for (const orig of allOriginations) {
       yield_projected += lotOriginationBalance(orig, i) * orig.program.default_rate / 12
     }
     const yield_land_bucket = lb.totals[i].interest_income
@@ -315,7 +344,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
       prevExistingBalances.set(key, curr)
     }
     // Lot-driven cohorts: pay off when age == term
-    for (const orig of lb.lotOriginations) {
+    for (const orig of allOriginations) {
       if (i - orig.origination_month_idx === orig.program.default_term_months) {
         payoffs_count += orig.count
         payoffs_amount += orig.count * orig.max_amount_per_loan

@@ -1,0 +1,49 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { createServiceClient } from '@/lib/supabase'
+
+export async function GET() {
+  try {
+    const sb = createServiceClient()
+    const { data, error } = await sb
+      .from('new_origination_schedule')
+      .select('*')
+      .order('month')
+    if (error) throw error
+    return NextResponse.json(data ?? [])
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 500 })
+  }
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json()
+    if (!body.builder_id) {
+      return NextResponse.json({ error: 'builder_id is required' }, { status: 400 })
+    }
+    if (!body.month || !/^\d{4}-\d{2}$/.test(String(body.month))) {
+      return NextResponse.json({ error: 'month is required (YYYY-MM)' }, { status: 400 })
+    }
+
+    const sb = createServiceClient()
+    const payload = {
+      builder_id:             body.builder_id,
+      land_bucket_project_id: body.land_bucket_project_id || null,
+      month:                  body.month,
+      loan_count:             Number(body.loan_count) || 0,
+      avg_loan_amount:        Number(body.avg_loan_amount) || 0,
+      loan_program_id:        body.loan_program_id || null,
+      notes:                  body.notes || null,
+    }
+
+    const { data, error } = await sb
+      .from('new_origination_schedule')
+      .insert(payload)
+      .select()
+      .single()
+    if (error) throw error
+    return NextResponse.json(data)
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 500 })
+  }
+}

@@ -12,6 +12,7 @@ type FormState = Omit<NewOriginationEntry, 'id'> & { id?: string }
 const emptyForm = (): FormState => ({
   builder_id: '',
   land_bucket_project_id: null,
+  development_name: null,
   month: defaultMonth(),
   loan_count: 0,
   avg_loan_amount: 0,
@@ -197,6 +198,16 @@ interface BuilderBlockGroup {
   projects: { key: string; projectName: string; entries: NewOriginationEntry[] }[]
 }
 
+// Display label for a single entry's development. Prefers a linked Land Bucket
+// project (so renaming the project propagates), then the free-text name on the
+// row, then a placeholder.
+function entryDevName(e: NewOriginationEntry, projectById: Map<string, LandBucketProject>): string {
+  if (e.land_bucket_project_id) {
+    return projectById.get(e.land_bucket_project_id)?.name ?? '(deleted project)'
+  }
+  return e.development_name?.trim() || '(no development)'
+}
+
 function groupEntries(
   entries: NewOriginationEntry[],
   builders: Builder[],
@@ -208,7 +219,9 @@ function groupEntries(
 
   for (const e of entries) {
     const bKey = e.builder_id
-    const pKey = e.land_bucket_project_id ?? '__none__'
+    // Group key is the display name so free-text developments group together
+    // (and group with a linked project of the same name).
+    const pKey = entryDevName(e, projectById)
     if (!buckets.has(bKey)) buckets.set(bKey, new Map())
     const inner = buckets.get(bKey)!
     if (!inner.has(pKey)) inner.set(pKey, [])
@@ -218,9 +231,9 @@ function groupEntries(
   const out: BuilderBlockGroup[] = []
   for (const [bKey, projMap] of buckets) {
     const builderName = builderById.get(bKey)?.name ?? '(unknown builder)'
-    const projGroups = Array.from(projMap.entries()).map(([pKey, ents]) => ({
-      key: pKey,
-      projectName: pKey === '__none__' ? '(no development)' : projectById.get(pKey)?.name ?? '(deleted project)',
+    const projGroups = Array.from(projMap.entries()).map(([projectName, ents]) => ({
+      key: projectName,
+      projectName,
       entries: ents.sort((a, b) => a.month.localeCompare(b.month)),
     }))
     projGroups.sort((a, b) => a.projectName.localeCompare(b.projectName))
@@ -261,7 +274,7 @@ function BuilderBlock({
               return (
                 <tr key={e.id}>
                   <td className="text-[#C9D1D9] font-medium">{group.builderName}</td>
-                  <td>{proj.key === '__none__'
+                  <td>{proj.projectName === '(no development)'
                     ? <span className="text-[#8B949E]">—</span>
                     : proj.projectName}</td>
                   <td className="font-mono text-[10px]">{e.month}</td>
@@ -345,11 +358,35 @@ function EntryEditor({
           </div>
           <div>
             <div className="text-[10px] text-[#8B949E] mb-1">Development (optional)</div>
-            <select className="form-input" value={form.land_bucket_project_id ?? ''}
-                    onChange={e => u({ land_bucket_project_id: e.target.value || null })}>
-              <option value="">— none —</option>
-              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <input
+              className="form-input"
+              list="dev-suggestions"
+              value={form.development_name
+                ?? (form.land_bucket_project_id
+                  ? projects.find(p => p.id === form.land_bucket_project_id)?.name ?? ''
+                  : '')}
+              placeholder="Type or pick a development name"
+              onChange={e => {
+                const typed = e.target.value
+                // If the typed string matches an existing Land Bucket project,
+                // link to it; otherwise treat as a free-text name.
+                const match = projects.find(p => p.name.toLowerCase() === typed.toLowerCase())
+                u({
+                  development_name: typed || null,
+                  land_bucket_project_id: match?.id ?? null,
+                })
+              }}
+            />
+            <datalist id="dev-suggestions">
+              {projects.map(p => <option key={p.id} value={p.name} />)}
+            </datalist>
+            <div className="text-[10px] text-[#8B949E] mt-0.5 italic">
+              {form.land_bucket_project_id
+                ? 'Linked to a Land Bucket project.'
+                : form.development_name
+                  ? 'Free-text development (not linked to Land Bucket).'
+                  : 'Leave blank for no development.'}
+            </div>
           </div>
           <div>
             <div className="text-[10px] text-[#8B949E] mb-1">Month (YYYY-MM)</div>

@@ -170,6 +170,9 @@ export interface NewOriginationEntry {
   id: string
   builder_id: string
   land_bucket_project_id: string | null
+  // Free-text development name. When the user picks an existing project from
+  // the autocomplete, both this and land_bucket_project_id are populated.
+  development_name: string | null
   month: string  // 'YYYY-MM'
   loan_count: number
   avg_loan_amount: number

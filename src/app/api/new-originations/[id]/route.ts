@@ -9,6 +9,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     const payload: Record<string, unknown> = { updated_at: new Date().toISOString() }
     if (body.builder_id !== undefined)             payload.builder_id = body.builder_id
     if (body.land_bucket_project_id !== undefined) payload.land_bucket_project_id = body.land_bucket_project_id || null
+    if (body.development_name !== undefined)       payload.development_name = (body.development_name ?? '').trim() || null
     if (body.month !== undefined)                  payload.month = body.month
     if (body.loan_count !== undefined)             payload.loan_count = Number(body.loan_count) || 0
     if (body.avg_loan_amount !== undefined)        payload.avg_loan_amount = Number(body.avg_loan_amount) || 0

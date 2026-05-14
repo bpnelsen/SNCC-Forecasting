@@ -135,34 +135,17 @@ export default function LandBucketPage() {
                 <tr><td colSpan={11} className="text-center text-xs text-[#8B949E] py-8">
                   No land bucket projects yet. Click <span className="text-[#D4A853]">New Project</span> to add one.
                 </td></tr>
-              ) : projects.map(p => {
-                const b = builders.find(x => x.id === p.builder_id)
-                const lp = programs.find(x => x.id === p.vertical_loan_program_id)
-                return (
-                  <tr key={p.id}>
-                    <td className="text-[#C9D1D9] font-medium">{p.name}</td>
-                    <td>{b?.name ?? <span className="text-[#8B949E]">—</span>}</td>
-                    <td className="num">{p.total_lots}</td>
-                    <td className="num">{formatCurrency(p.lot_price, true)}</td>
-                    <td className="num">{p.absorption_rate ?? <span className="text-[#8B949E]">builder</span>}</td>
-                    <td className="num">{formatCurrency(p.balance_outstanding, true)}</td>
-                    <td className="num">{(p.interest_rate * 100).toFixed(2)}%</td>
-                    <td className="num">
-                      {p.vertical_loan_amount != null
-                        ? formatCurrency(p.vertical_loan_amount, true)
-                        : <span className="text-[#8B949E]">3× lot</span>}
-                    </td>
-                    <td>{lp?.name ?? <span className="text-[#8B949E]">—</span>}</td>
-                    <td className="text-[10px] font-mono">{p.lot_sales_start_date ?? '—'}</td>
-                    <td className="flex gap-1">
-                      <button onClick={() => setEditing({ ...p, lot_release_schedule: p.lot_release_schedule ?? {} })}
-                              className="btn-ghost"><Pencil className="w-3 h-3" /></button>
-                      <button onClick={() => remove(p)} disabled={busy}
-                              className="btn-ghost text-[#F85149]"><Trash2 className="w-3 h-3" /></button>
-                    </td>
-                  </tr>
-                )
-              })}
+              ) : groupByBuilder(projects, builders).map(group => (
+                <BuilderGroup
+                  key={group.key}
+                  group={group}
+                  programs={programs}
+                  busy={busy}
+                  onEdit={p => setEditing({ ...p, lot_release_schedule: p.lot_release_schedule ?? {} })}
+                  onDelete={remove}
+                />
+              ))}
+              {projects.length > 0 && <GrandTotalRow projects={projects} />}
             </tbody>
           </table>
         </div>
@@ -306,4 +289,132 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
       {hint && <div className="text-[10px] text-[#8B949E] mt-0.5 italic">{hint}</div>}
     </div>
   )
+}
+
+interface ProjectGroup {
+  key: string                // builder id, or '__none__' for projects without a builder
+  builderName: string        // display name, '(no builder)' for the unassigned bucket
+  projects: LandBucketProject[]
+}
+
+// Group projects by builder, sort groups alphabetically (unassigned last), sort
+// projects within each group by name.
+function groupByBuilder(projects: LandBucketProject[], builders: Builder[]): ProjectGroup[] {
+  const buildersById = new Map(builders.map(b => [b.id, b]))
+  const groups = new Map<string, ProjectGroup>()
+
+  for (const p of projects) {
+    const key = p.builder_id ?? '__none__'
+    const builderName = p.builder_id
+      ? buildersById.get(p.builder_id)?.name ?? '(unknown builder)'
+      : '(no builder)'
+    if (!groups.has(key)) groups.set(key, { key, builderName, projects: [] })
+    groups.get(key)!.projects.push(p)
+  }
+
+  const arr = Array.from(groups.values())
+  for (const g of arr) g.projects.sort((a, b) => a.name.localeCompare(b.name))
+  arr.sort((a, b) => {
+    if (a.key === '__none__') return 1
+    if (b.key === '__none__') return -1
+    return a.builderName.localeCompare(b.builderName)
+  })
+  return arr
+}
+
+function BuilderGroup({
+  group, programs, busy, onEdit, onDelete,
+}: {
+  group: ProjectGroup
+  programs: LoanProgram[]
+  busy: boolean
+  onEdit: (p: LandBucketProject) => void
+  onDelete: (p: LandBucketProject) => void
+}) {
+  const subtotal = sumProjects(group.projects)
+  return (
+    <>
+      {group.projects.map(p => {
+        const lp = programs.find(x => x.id === p.vertical_loan_program_id)
+        return (
+          <tr key={p.id}>
+            <td className="text-[#C9D1D9] font-medium">{p.name}</td>
+            <td>{group.key === '__none__'
+              ? <span className="text-[#8B949E]">—</span>
+              : group.builderName}</td>
+            <td className="num">{p.total_lots}</td>
+            <td className="num">{formatCurrency(p.lot_price, true)}</td>
+            <td className="num">{p.absorption_rate ?? <span className="text-[#8B949E]">builder</span>}</td>
+            <td className="num">{formatCurrency(p.balance_outstanding, true)}</td>
+            <td className="num">{(p.interest_rate * 100).toFixed(2)}%</td>
+            <td className="num">
+              {p.vertical_loan_amount != null
+                ? formatCurrency(p.vertical_loan_amount, true)
+                : <span className="text-[#8B949E]">3× lot</span>}
+            </td>
+            <td>{lp?.name ?? <span className="text-[#8B949E]">—</span>}</td>
+            <td className="text-[10px] font-mono">{p.lot_sales_start_date ?? '—'}</td>
+            <td className="flex gap-1">
+              <button onClick={() => onEdit(p)} className="btn-ghost"><Pencil className="w-3 h-3" /></button>
+              <button onClick={() => onDelete(p)} disabled={busy}
+                      className="btn-ghost text-[#F85149]"><Trash2 className="w-3 h-3" /></button>
+            </td>
+          </tr>
+        )
+      })}
+      <tr className="bg-[#21262D]/50 text-[#D4A853] font-medium">
+        <td colSpan={2} className="uppercase text-[10px] tracking-wide">
+          {group.builderName} subtotal · {group.projects.length} project{group.projects.length === 1 ? '' : 's'}
+        </td>
+        <td className="num">{subtotal.lots}</td>
+        <td className="num text-[#8B949E]">—</td>
+        <td className="num">{subtotal.absorption == null ? '—' : subtotal.absorption.toFixed(1)}</td>
+        <td className="num">{formatCurrency(subtotal.balance, true)}</td>
+        <td className="num text-[#8B949E]">—</td>
+        <td className="num text-[#8B949E]">—</td>
+        <td className="text-[#8B949E]">—</td>
+        <td className="text-[#8B949E]">—</td>
+        <td />
+      </tr>
+    </>
+  )
+}
+
+function GrandTotalRow({ projects }: { projects: LandBucketProject[] }) {
+  const total = sumProjects(projects)
+  return (
+    <tr className="bg-[#D4A853]/10 text-[#E6EDF3] font-semibold border-t-2 border-[#D4A853]/40">
+      <td colSpan={2} className="uppercase text-[10px] tracking-wide">
+        Grand total · {projects.length} project{projects.length === 1 ? '' : 's'}
+      </td>
+      <td className="num">{total.lots}</td>
+      <td className="num text-[#8B949E]">—</td>
+      <td className="num">{total.absorption == null ? '—' : total.absorption.toFixed(1)}</td>
+      <td className="num">{formatCurrency(total.balance, true)}</td>
+      <td className="num text-[#8B949E]">—</td>
+      <td className="num text-[#8B949E]">—</td>
+      <td className="text-[#8B949E]">—</td>
+      <td className="text-[#8B949E]">—</td>
+      <td />
+    </tr>
+  )
+}
+
+// Aggregate the sum-able fields. absorption is null when no project in the
+// group has an explicit absorption rate set, so the table displays "—" rather
+// than a misleading 0.
+function sumProjects(projects: LandBucketProject[]): {
+  lots: number
+  balance: number
+  absorption: number | null
+} {
+  let lots = 0
+  let balance = 0
+  let absorption: number | null = null
+  for (const p of projects) {
+    lots += p.total_lots
+    balance += p.balance_outstanding
+    if (p.absorption_rate != null) absorption = (absorption ?? 0) + p.absorption_rate
+  }
+  return { lots, balance, absorption }
 }

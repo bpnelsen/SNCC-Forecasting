@@ -41,9 +41,9 @@ function toDate(v: unknown): string | null {
 
 function findHeaderRow(rows: unknown[][]): number {
   // Headers can live well below row 1 — the canonical SNCC report puts them on
-  // row 31. Scan the first 50 rows so any pre-header banner/metadata rows
-  // (title blocks, filters, summaries) don't block detection.
-  for (let i = 0; i < Math.min(50, rows.length); i++) {
+  // row 31. Scan the first 100 rows so pre-header banner/metadata rows don't
+  // block detection.
+  for (let i = 0; i < Math.min(100, rows.length); i++) {
     const row = rows[i] as unknown[]
     if (row.some(c => typeof c === 'string' && c.toLowerCase().includes('borrower'))) {
       return i
@@ -52,12 +52,33 @@ function findHeaderRow(rows: unknown[][]): number {
   return -1
 }
 
-export function parseCurrentReport(buffer: Buffer): Loan[] {
+export interface ParseDiagnostics {
+  sheet_names: string[]
+  chosen_sheet: string | null
+  header_row_index: number | null  // 0-based index; the spreadsheet row number is this + 1
+  header_row_preview: string[] | null
+  detected_columns: Record<string, number>
+  total_rows: number
+  rows_with_loan_number: number
+  sample_first_data_row: unknown[] | null
+}
+
+export function parseCurrentReportWithDiagnostics(
+  buffer: Buffer,
+): { loans: Loan[]; diagnostics: ParseDiagnostics } {
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: false })
 
-  // Sheet name is no longer constrained — scan every sheet for one that has a
-  // recognizable header row (a cell on one of the first 50 rows contains
-  // "borrower"). Fall back to the first sheet if nothing matches.
+  const diagnostics: ParseDiagnostics = {
+    sheet_names: wb.SheetNames,
+    chosen_sheet: null,
+    header_row_index: null,
+    header_row_preview: null,
+    detected_columns: {},
+    total_rows: 0,
+    rows_with_loan_number: 0,
+    sample_first_data_row: null,
+  }
+
   let rows: unknown[][] = []
   let headerRow = -1
   for (const name of wb.SheetNames) {
@@ -66,15 +87,23 @@ export function parseCurrentReport(buffer: Buffer): Loan[] {
     if (hr !== -1) {
       rows = candidate
       headerRow = hr
+      diagnostics.chosen_sheet = name
       break
     }
   }
   if (headerRow === -1) {
-    rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+    diagnostics.chosen_sheet = wb.SheetNames[0] ?? null
+    rows = wb.SheetNames[0]
+      ? XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+      : []
     headerRow = 0
   }
+  diagnostics.header_row_index = headerRow
+  diagnostics.total_rows = rows.length
 
-  const headers = (rows[headerRow] as string[]).map(h => String(h || '').toLowerCase().trim())
+  const rawHeaderRow = (rows[headerRow] as unknown[]) || []
+  const headers = rawHeaderRow.map(h => String(h || '').toLowerCase().trim())
+  diagnostics.header_row_preview = rawHeaderRow.map(h => String(h ?? ''))
 
   const idx = (keyword: string) => headers.findIndex(h => h.includes(keyword))
 
@@ -99,13 +128,18 @@ export function parseCurrentReport(buffer: Buffer): Loan[] {
     development:       idx('development'),
     subdivision:       idx('subdivision'),
   }
+  diagnostics.detected_columns = col
 
   const loans: Loan[] = []
 
   for (let i = headerRow + 1; i < rows.length; i++) {
     const row = rows[i] as unknown[]
-    const loanNum = String(row[col.loan_number] || '').trim()
+    if (diagnostics.sample_first_data_row === null && row.some(c => c !== '' && c !== null && c !== undefined)) {
+      diagnostics.sample_first_data_row = row
+    }
+    const loanNum = col.loan_number >= 0 ? String(row[col.loan_number] || '').trim() : ''
     if (!loanNum) continue
+    diagnostics.rows_with_loan_number += 1
 
     const borrower    = String(row[col.borrower] || '').trim()
     const program     = String(row[col.loan_program] || '').trim()
@@ -139,5 +173,9 @@ export function parseCurrentReport(buffer: Buffer): Loan[] {
     })
   }
 
-  return loans
+  return { loans, diagnostics }
+}
+
+export function parseCurrentReport(buffer: Buffer): Loan[] {
+  return parseCurrentReportWithDiagnostics(buffer).loans
 }

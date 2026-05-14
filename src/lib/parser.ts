@@ -39,27 +39,37 @@ function toDate(v: unknown): string | null {
   return isNaN(parsed.getTime()) ? null : parsed.toISOString().split('T')[0]
 }
 
+function findHeaderRow(rows: unknown[][]): number {
+  for (let i = 0; i < Math.min(20, rows.length); i++) {
+    const row = rows[i] as unknown[]
+    if (row.some(c => typeof c === 'string' && c.toLowerCase().includes('borrower'))) {
+      return i
+    }
+  }
+  return -1
+}
+
 export function parseCurrentReport(buffer: Buffer): Loan[] {
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: false })
 
-  // Find the "Current Report" sheet (case-insensitive)
-  const sheetName = wb.SheetNames.find(n =>
-    n.toLowerCase().replace(/\s/g, '') === 'currentreport'
-  ) || wb.SheetNames[0]
-
-  const ws = wb.Sheets[sheetName]
-  const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-
-  // Find header row (look for 'Borrower' or 'Loan Number')
+  // Sheet name is no longer constrained — scan every sheet for one that has a
+  // recognizable header row (any cell on a row in the first 20 contains
+  // "borrower"). Fall back to the first sheet if nothing matches.
+  let rows: unknown[][] = []
   let headerRow = -1
-  for (let i = 0; i < Math.min(20, rows.length); i++) {
-    const row = rows[i] as string[]
-    if (row.some(c => typeof c === 'string' && c.toLowerCase().includes('borrower'))) {
-      headerRow = i
+  for (const name of wb.SheetNames) {
+    const candidate: unknown[][] = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '' })
+    const hr = findHeaderRow(candidate)
+    if (hr !== -1) {
+      rows = candidate
+      headerRow = hr
       break
     }
   }
-  if (headerRow === -1) headerRow = 0
+  if (headerRow === -1) {
+    rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+    headerRow = 0
+  }
 
   const headers = (rows[headerRow] as string[]).map(h => String(h || '').toLowerCase().trim())
 

@@ -156,7 +156,7 @@ export default function ImportPage() {
       <div className="card fade-up fade-up-3 p-4">
         <div className="text-xs font-medium text-[#C9D1D9] mb-2">What happens during import?</div>
         <ul className="space-y-1.5 text-xs text-[#8B949E]">
-          <li>• The "Current Report" sheet is parsed — all loan rows are extracted</li>
+          <li>• The first sheet with a recognizable header row is parsed (any sheet name works)</li>
           <li>• Each loan is classified (SFR, MFR, A&D, Raw Land, Finished Lots, HHH)</li>
           <li>• Projected balance = MAX(disbursed, loan_amount × draw%)</li>
           <li>• This version is set as active — the dashboard updates automatically</li>

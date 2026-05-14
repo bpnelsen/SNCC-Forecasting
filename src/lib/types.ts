@@ -157,6 +157,12 @@ export interface LandBucketProject {
   dev_end_date: string | null
   lot_sales_start_date: string | null
   vertical_loan_program_id: string | null
+  // Per-project override: dollar amount per vertical loan when a lot sells.
+  // NULL = use calculator default (lot_price × multiple).
+  vertical_loan_amount: number | null
+  // Optional manual lot-release override. Keys are YYYY-MM, values are the
+  // integer lots released that month. When non-empty, overrides absorption_rate.
+  lot_release_schedule: Record<string, number>
   notes: string | null
 }
 

@@ -1,29 +1,41 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Assumptions } from '@/lib/types'
+import { Assumptions, LoanProgram } from '@/lib/types'
 import { Settings2, Save, AlertCircle, CheckCircle } from 'lucide-react'
 
 export default function AssumptionsPage() {
   const [data, setData]       = useState<Assumptions | null>(null)
+  const [programs, setPrograms] = useState<LoanProgram[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving]   = useState(false)
   const [msg, setMsg]         = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
 
   useEffect(() => {
-    fetch('/api/assumptions')
-      .then(r => r.json()).then(setData).finally(() => setLoading(false))
+    Promise.all([
+      fetch('/api/assumptions').then(r => r.json()),
+      fetch('/api/loan-programs').then(r => r.json()),
+    ]).then(([a, p]) => {
+      setData(a)
+      setPrograms(Array.isArray(p) ? p : [])
+    }).finally(() => setLoading(false))
   }, [])
 
   const save = async () => {
     if (!data) return
     setSaving(true); setMsg(null)
     try {
-      const res = await fetch('/api/assumptions', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
-      })
-      if (!res.ok) throw new Error((await res.json()).error)
-      setMsg({ type: 'ok', text: 'Assumptions saved successfully.' })
+      const [a, p] = await Promise.all([
+        fetch('/api/assumptions', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+        }),
+        fetch('/api/loan-programs', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(programs),
+        }),
+      ])
+      if (!a.ok) throw new Error((await a.json()).error || 'Assumptions save failed')
+      if (!p.ok) throw new Error((await p.json()).error || 'Loan-program save failed')
+      setMsg({ type: 'ok', text: 'Assumptions and loan programs saved.' })
     } catch (e) {
       setMsg({ type: 'err', text: e instanceof Error ? e.message : 'Save failed' })
     } finally { setSaving(false) }
@@ -31,6 +43,9 @@ export default function AssumptionsPage() {
 
   const update = (field: keyof Assumptions, value: unknown) =>
     setData(prev => prev ? { ...prev, [field]: value } : prev)
+
+  const updateProgram = (id: string, patch: Partial<LoanProgram>) =>
+    setPrograms(prev => prev.map(p => p.id === id ? { ...p, ...patch } : p))
 
   if (loading) return <div className="p-6 text-[#8B949E] text-sm">Loading…</div>
   if (!data)   return null
@@ -113,18 +128,68 @@ export default function AssumptionsPage() {
         />
       </Section>
 
-      {/* Land Bucket */}
-      <Section title="Land Bucket Developments">
+      {/* Loan Programs — drives new vertical-start cohorts */}
+      <Section title="Loan Programs (New Vertical Starts)">
         <p className="text-xs text-[#8B949E] mb-3">
-          {data.land_bucket.length} development(s) configured. Edit the JSON below to add/remove.
+          Draw curve, default rate, and term applied to every new vertical loan cohort.
+          When a lot sells, a cohort is originated under the program assigned to that Land
+          Bucket project and ramps its balance through this curve.
         </p>
-        <textarea
-          className="form-input h-48 text-xs resize-y"
-          value={JSON.stringify(data.land_bucket, null, 2)}
-          onChange={e => {
-            try { update('land_bucket', JSON.parse(e.target.value)) } catch {}
-          }}
-        />
+        {programs.length === 0 ? (
+          <div className="text-xs text-[#8B949E]">
+            No loan programs found. Run <code>supabase/migrations/002_modular_assumptions.sql</code>.
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {programs.map(p => (
+              <div key={p.id} className="border border-[#30363D] rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-medium text-[#C9D1D9]">{p.name}</div>
+                    <div className="text-[10px] text-[#8B949E]">Product type: {p.product_type}</div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="text-[10px] text-[#8B949E] mb-1">Default rate (%)</div>
+                    <input type="number" step="0.01" className="form-input text-right"
+                           value={(p.default_rate * 100).toFixed(2)}
+                           onChange={e => updateProgram(p.id, { default_rate: Number(e.target.value) / 100 })} />
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-[#8B949E] mb-1">Default term (months)</div>
+                    <input type="number" className="form-input text-right" value={p.default_term_months}
+                           onChange={e => updateProgram(p.id, { default_term_months: Number(e.target.value) || 0 })} />
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-[#8B949E] mb-1">
+                    Draw curve (incremental monthly fractions, comma-separated; sum ≈ 1.0)
+                  </div>
+                  <input
+                    className="form-input text-xs font-mono"
+                    value={p.draw_curve.join(', ')}
+                    onChange={e => {
+                      const parts = e.target.value.split(',').map(s => Number(s.trim()))
+                      if (parts.every(n => !isNaN(n))) updateProgram(p.id, { draw_curve: parts })
+                    }}
+                  />
+                  <div className="text-[10px] text-[#8B949E] mt-1">
+                    Months: {p.draw_curve.length} · sum: {p.draw_curve.reduce((a, b) => a + b, 0).toFixed(3)}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      {/* Land Bucket — read-only pointer; full editor lives in /land-bucket */}
+      <Section title="Land Bucket Developments">
+        <p className="text-xs text-[#8B949E]">
+          Edit land bucket projects and their per-project assumptions on the{' '}
+          <a href="/land-bucket" className="text-[#D4A853] underline">Land Bucket</a> tab.
+        </p>
       </Section>
     </div>
   )

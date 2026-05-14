@@ -143,25 +143,14 @@ export default function AssumptionsPage() {
         <Row label="Arive MFR"><NumInput value={data.ps_arive_mfr} onChange={v => update('ps_arive_mfr', v)} /></Row>
       </Section>
 
-      {/* NHCF Loan Counts */}
-      <Section title="New Originations — Monthly Loan Counts (NHCF)">
-        <p className="text-xs text-fg-dim mb-4">
-          Enter how many new loans each builder funds per month (months 0–11 = current through 12 months out).
-        </p>
-        <NhcfEditor
-          label="Loan Counts"
-          data={data.nhcf_loan_counts}
-          onChange={v => update('nhcf_loan_counts', v)}
-        />
-      </Section>
+      {/* NHCF tables previously lived here (legacy assumptions.nhcf_loan_counts /
+          nhcf_payoff_counts JSON blobs). The calculator never read those fields —
+          the dashboard's Fcst SFR / Fcst MFR come from the /originations tab via
+          the new_origination_schedule table. The editor was removed to stop the
+          UI from implying that NHCF inputs here affect the forecast. The legacy
+          columns still exist in the assumptions table so older data isn't lost.
 
-      <Section title="Payoff Counts (NHCF)">
-        <NhcfEditor
-          label="Payoff Counts"
-          data={data.nhcf_payoff_counts}
-          onChange={v => update('nhcf_payoff_counts', v)}
-        />
-      </Section>
+          To plan new starts: New Originations tab → New Entry. */}
 
       {/* Loan Programs — drives new vertical-start cohorts */}
       <Section title="Loan Programs (New Vertical Starts)">
@@ -263,44 +252,3 @@ function NumInput({ value, onChange, pct = false }: { value: number; onChange: (
   )
 }
 
-function NhcfEditor({
-  label, data, onChange
-}: { label: string; data: Record<string, Record<string, number>>; onChange: (v: Record<string, Record<string, number>>) => void }) {
-  const builders = Object.keys(data)
-  const months   = Array.from({ length: 12 }, (_, i) => String(i))
-
-  return (
-    <div className="overflow-x-auto">
-      <table className="data-table text-[10px]">
-        <thead>
-          <tr>
-            <th>Builder</th>
-            {months.map(m => <th key={m} className="text-center">M{m}</th>)}
-          </tr>
-        </thead>
-        <tbody>
-          {builders.map(builder => (
-            <tr key={builder}>
-              <td className="text-fg font-medium capitalize">{builder.replace(/_/g, ' ')}</td>
-              {months.map(m => (
-                <td key={m} className="p-1">
-                  <input
-                    type="number"
-                    className="w-12 bg-bg border border-border-strong rounded text-center text-[10px]
-                               text-fg py-1 focus:outline-none focus:border-accent"
-                    value={data[builder]?.[m] || 0}
-                    min={0}
-                    onChange={e => {
-                      const next = { ...data, [builder]: { ...data[builder], [m]: parseInt(e.target.value) || 0 } }
-                      onChange(next)
-                    }}
-                  />
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}

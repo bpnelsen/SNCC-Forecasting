@@ -112,6 +112,18 @@ export default function LandBucketPage() {
         </div>
       )}
 
+      <div className="card fade-up fade-up-1.5 p-3 mb-2 flex items-center gap-2 flex-wrap">
+        <span className="text-xs font-medium text-[#8B949E] mr-2">Builders:</span>
+        {builders.length === 0
+          ? <span className="text-[10px] text-[#F85149]">No builders found — add one →</span>
+          : builders.map(b => (
+              <span key={b.id} className="text-[10px] px-2 py-0.5 rounded bg-[#21262D] text-[#C9D1D9]">
+                {b.name}
+              </span>
+            ))}
+        <BuilderAdder onAdded={load} />
+      </div>
+
       <div className="card fade-up fade-up-2">
         <div className="overflow-x-auto">
           <table className="data-table">
@@ -288,6 +300,66 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
       {children}
       {hint && <div className="text-[10px] text-[#8B949E] mt-0.5 italic">{hint}</div>}
     </div>
+  )
+}
+
+// Inline "+ Add builder" control on the Land Bucket page. Lets the user add a
+// builder without an SQL migration, then refreshes the page state so the new
+// builder appears in the Project Editor dropdown.
+function BuilderAdder({ onAdded }: { onAdded: () => Promise<void> | void }) {
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr]   = useState<string | null>(null)
+
+  const submit = async () => {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    setBusy(true); setErr(null)
+    try {
+      const res = await fetch('/api/builders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmed }),
+      })
+      const text = await res.text()
+      let body: { error?: string } | null = null
+      try { body = text ? JSON.parse(text) : null } catch { /* ignore */ }
+      if (!res.ok) {
+        throw new Error(body?.error || text || `${res.status} ${res.statusText}`)
+      }
+      setName('')
+      setOpen(false)
+      await onAdded()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Add failed')
+    } finally { setBusy(false) }
+  }
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="btn-ghost text-[10px]">
+        <Plus className="w-3 h-3" /> Add builder
+      </button>
+    )
+  }
+  return (
+    <span className="flex items-center gap-1">
+      <input
+        autoFocus
+        value={name}
+        onChange={e => setName(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') { setOpen(false); setName('') } }}
+        placeholder="Builder name"
+        className="form-input text-[10px] py-0.5 px-2 w-32"
+      />
+      <button onClick={submit} disabled={busy || !name.trim()} className="btn-primary text-[10px] py-0.5 px-2">
+        {busy ? '…' : 'Save'}
+      </button>
+      <button onClick={() => { setOpen(false); setName(''); setErr(null) }}
+              className="btn-ghost text-[10px] py-0.5 px-2">Cancel</button>
+      {err && <span className="text-[10px] text-[#F85149] ml-1">{err}</span>}
+    </span>
   )
 }
 

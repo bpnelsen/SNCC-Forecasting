@@ -12,33 +12,68 @@ export default function AssumptionsPage() {
   const [msg, setMsg]         = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
 
   useEffect(() => {
-    Promise.all([
-      fetch('/api/assumptions').then(r => r.json()),
-      fetch('/api/loan-programs').then(r => r.json()),
-    ]).then(([a, p]) => {
-      setData(a)
-      setPrograms(Array.isArray(p) ? p : [])
-    }).finally(() => setLoading(false))
+    (async () => {
+      try {
+        const [aRes, pRes] = await Promise.all([
+          fetch('/api/assumptions'),
+          fetch('/api/loan-programs'),
+        ])
+        const aBody = await aRes.json().catch(() => null)
+        const pBody = await pRes.json().catch(() => null)
+        if (!aRes.ok || aBody?.error) {
+          setMsg({
+            type: 'err',
+            text: `Failed to load assumptions: ${aBody?.error ?? aRes.statusText}`,
+          })
+          setData(null)
+        } else {
+          setData(aBody)
+        }
+        setPrograms(Array.isArray(pBody) ? pBody : [])
+      } finally { setLoading(false) }
+    })()
   }, [])
 
   const save = async () => {
     if (!data) return
     setSaving(true); setMsg(null)
     try {
-      const [a, p] = await Promise.all([
-        fetch('/api/assumptions', {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
-        }),
-        fetch('/api/loan-programs', {
+      // Save sequentially so we know which endpoint failed and can surface its
+      // real error. Promise.all would mask one failure with the other.
+      const a = await fetch('/api/assumptions', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+      })
+      if (!a.ok) throw new Error(await readError(a, 'Assumptions'))
+
+      if (programs.length > 0) {
+        const p = await fetch('/api/loan-programs', {
           method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(programs),
-        }),
-      ])
-      if (!a.ok) throw new Error((await a.json()).error || 'Assumptions save failed')
-      if (!p.ok) throw new Error((await p.json()).error || 'Loan-program save failed')
+        })
+        if (!p.ok) throw new Error(await readError(p, 'Loan programs'))
+      }
+
       setMsg({ type: 'ok', text: 'Assumptions and loan programs saved.' })
     } catch (e) {
       setMsg({ type: 'err', text: e instanceof Error ? e.message : 'Save failed' })
     } finally { setSaving(false) }
+  }
+
+  // Reads a non-ok Response body without throwing on empty / non-JSON bodies.
+  // Without this, calling .json() on an empty body produces the cryptic
+  // "Failed to execute 'json' on 'Response': Unexpected end of JSON input"
+  // message and hides whatever the API actually said.
+  async function readError(r: Response, scope: string): Promise<string> {
+    const text = await r.text().catch(() => '')
+    if (text) {
+      try {
+        const parsed = JSON.parse(text)
+        if (parsed && typeof parsed === 'object' && 'error' in parsed) {
+          return `${scope} save failed: ${parsed.error}`
+        }
+      } catch { /* fall through to raw text */ }
+      return `${scope} save failed (${r.status} ${r.statusText}): ${text.slice(0, 300)}`
+    }
+    return `${scope} save failed: ${r.status} ${r.statusText || '(empty response body)'}`
   }
 
   const update = (field: keyof Assumptions, value: unknown) =>

@@ -40,7 +40,10 @@ function toDate(v: unknown): string | null {
 }
 
 function findHeaderRow(rows: unknown[][]): number {
-  for (let i = 0; i < Math.min(20, rows.length); i++) {
+  // Headers can live well below row 1 — the canonical SNCC report puts them on
+  // row 31. Scan the first 50 rows so any pre-header banner/metadata rows
+  // (title blocks, filters, summaries) don't block detection.
+  for (let i = 0; i < Math.min(50, rows.length); i++) {
     const row = rows[i] as unknown[]
     if (row.some(c => typeof c === 'string' && c.toLowerCase().includes('borrower'))) {
       return i
@@ -53,7 +56,7 @@ export function parseCurrentReport(buffer: Buffer): Loan[] {
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: false })
 
   // Sheet name is no longer constrained — scan every sheet for one that has a
-  // recognizable header row (any cell on a row in the first 20 contains
+  // recognizable header row (a cell on one of the first 50 rows contains
   // "borrower"). Fall back to the first sheet if nothing matches.
   let rows: unknown[][] = []
   let headerRow = -1
@@ -88,7 +91,10 @@ export function parseCurrentReport(buffer: Buffer): Loan[] {
     interest_reserve:  idx('interest reserve'),
     rate:              idx('interest rate') !== -1 ? idx('interest rate') : idx('rate'),
     accrued:           idx('accrued'),
-    project:           idx('project name') !== -1 ? idx('project name') : idx('project'),
+    project:           idx('collateral name') !== -1 ? idx('collateral name')
+                       : idx('collateral') !== -1 ? idx('collateral')
+                       : idx('project name') !== -1 ? idx('project name')
+                       : idx('project'),
     unit:              idx('unit'),
     development:       idx('development'),
     subdivision:       idx('subdivision'),

@@ -39,14 +39,41 @@ function toDate(v: unknown): string | null {
   return isNaN(parsed.getTime()) ? null : parsed.toISOString().split('T')[0]
 }
 
+// Exact header cell values we expect in a real header row (lowercased, trimmed).
+// The canonical SNCC export uses these as the actual column titles on row 31.
+const KNOWN_HEADERS = new Set([
+  'borrower',
+  'loan number',
+  'loan program',
+  'original loan amount',
+  'loan funded date',
+  'current loan due date',
+  'current loan amount',
+  'loan amount disbursed',
+  'loan amount remaining',
+  'interest reserve balance',
+  'current interest rate',
+  'interest accrued month-to-date',
+  'collateral name associated',
+  'project name',
+  'unit name',
+  'development name',
+  'subdivision name',
+])
+
 function findHeaderRow(rows: unknown[][]): number {
   // Headers can live well below row 1 — the canonical SNCC report puts them on
-  // row 31. Scan the first 100 rows so pre-header banner/metadata rows don't
-  // block detection.
+  // row 31, and the pre-header block contains decoy strings like
+  // "Borrower first name", "Co-Borrower 1 name" that a naive substring search
+  // would lock onto. Require at least 3 cells to be exact (case-insensitive,
+  // trimmed) matches against the known column titles before accepting a row.
   for (let i = 0; i < Math.min(100, rows.length); i++) {
     const row = rows[i] as unknown[]
-    if (row.some(c => typeof c === 'string' && c.toLowerCase().includes('borrower'))) {
-      return i
+    let hits = 0
+    for (const c of row) {
+      if (typeof c !== 'string') continue
+      if (KNOWN_HEADERS.has(c.trim().toLowerCase())) hits++
+      if (hits >= 3) return i
     }
   }
   return -1

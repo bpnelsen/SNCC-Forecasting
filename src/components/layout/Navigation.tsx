@@ -3,16 +3,17 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
-  LayoutDashboard, TrendingUp, Settings2, Upload, History, Building2, Landmark,
+  LayoutDashboard, TrendingUp, Settings2, Upload, History, Building2, Landmark, ClipboardList,
 } from 'lucide-react'
 
 const nav = [
-  { href: '/dashboard',   label: 'Dashboard',    icon: LayoutDashboard },
-  { href: '/forecast',    label: 'Forecast',     icon: TrendingUp },
-  { href: '/land-bucket', label: 'Land Bucket',  icon: Landmark },
-  { href: '/assumptions', label: 'Assumptions',  icon: Settings2 },
-  { href: '/import',      label: 'Import',       icon: Upload },
-  { href: '/versions',    label: 'Versions',     icon: History },
+  { href: '/dashboard',    label: 'Dashboard',       icon: LayoutDashboard },
+  { href: '/forecast',     label: 'Forecast',        icon: TrendingUp },
+  { href: '/originations', label: 'New Originations', icon: ClipboardList },
+  { href: '/land-bucket',  label: 'Land Bucket',     icon: Landmark },
+  { href: '/assumptions',  label: 'Assumptions',     icon: Settings2 },
+  { href: '/import',       label: 'Import',          icon: Upload },
+  { href: '/versions',     label: 'Versions',        icon: History },
 ]
 
 export function Navigation() {

@@ -95,6 +95,14 @@ export interface MonthlyBalance {
   profit_sharing: number
   total_income: number
   annualized_yield_pct: number
+  // Module 1 / 2 additions
+  lots_sold: number
+  lot_sale_proceeds: number
+  new_originations_count: number
+  new_originations_amount: number
+  payoffs_count: number
+  payoffs_amount: number
+  cash_flow: number
 }
 
 export interface ForecastResult {
@@ -111,4 +119,77 @@ export interface ForecastResult {
     hhh: number
     total: number
   }
+  land_bucket_schedules: LandBucketProjectSchedule[]
+}
+
+// ─── Modular assumption entities (from migration 002) ───────────────────────
+
+export type ProductType = 'SF' | 'MF' | 'LOT' | 'AD' | 'RAW_LAND' | 'OTHER'
+
+export interface LoanProgram {
+  id: string
+  name: string
+  product_type: ProductType
+  draw_curve: number[]
+  default_rate: number
+  default_term_months: number
+  notes: string | null
+}
+
+export interface Builder {
+  id: string
+  name: string
+  default_absorption_rate: number
+  default_loan_program_id: string | null
+  notes: string | null
+}
+
+export interface LandBucketProject {
+  id: string
+  name: string
+  builder_id: string | null
+  total_lots: number
+  lot_price: number
+  absorption_rate: number | null
+  balance_outstanding: number
+  interest_rate: number
+  dev_start_date: string | null
+  dev_end_date: string | null
+  lot_sales_start_date: string | null
+  vertical_loan_program_id: string | null
+  notes: string | null
+}
+
+export interface ForecastSettings {
+  id: string
+  start_date: string
+  horizon_months: number
+  default_rate_vertical: number
+  default_rate_land: number
+  is_active: boolean
+}
+
+// ─── Forecast outputs for Module 1 (Land Bucket) ────────────────────────────
+
+export interface LandBucketMonth {
+  month: string
+  label: string
+  lots_sold: number
+  lots_sold_cumulative: number
+  lots_remaining: number
+  sale_proceeds: number
+  ending_balance: number
+  interest_income: number
+  new_vertical_origs_count: number
+  new_vertical_origs_amount: number
+}
+
+export interface LandBucketProjectSchedule {
+  project_id: string
+  project_name: string
+  builder_name: string | null
+  total_lots: number
+  lot_price: number
+  absorption_rate: number
+  months: LandBucketMonth[]
 }

@@ -29,6 +29,7 @@ export async function POST(req: NextRequest) {
     const payload = {
       builder_id:             body.builder_id,
       land_bucket_project_id: body.land_bucket_project_id || null,
+      development_name:       (body.development_name ?? '').trim() || null,
       month:                  body.month,
       loan_count:             Number(body.loan_count) || 0,
       avg_loan_amount:        Number(body.avg_loan_amount) || 0,

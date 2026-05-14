@@ -224,48 +224,77 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Summary Table */}
+      {/* Summary Table — months across, product types / metrics down */}
       <div className="card fade-up fade-up-5">
         <div className="card-header"><span className="card-title">Monthly Summary Table</span></div>
-        <div className="overflow-x-auto">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Month</th>
-                <th className="text-right">SFR</th>
-                <th className="text-right">MFR</th>
-                <th className="text-right">A&D</th>
-                <th className="text-right">Raw Land</th>
-                <th className="text-right">Fin. Lots</th>
-                <th className="text-right">LB</th>
-                <th className="text-right">Total ALL</th>
-                <th className="text-right">Variance</th>
-                <th className="text-right">Income</th>
-                <th className="text-right">Yield</th>
-              </tr>
-            </thead>
-            <tbody>
-              {months.map((m, i) => (
-                <tr key={m.month}>
-                  <td className="text-fg font-medium">{m.label}</td>
-                  <td className="num">{formatCurrency(m.sfr, true)}</td>
-                  <td className="num">{formatCurrency(m.mfr, true)}</td>
-                  <td className="num">{formatCurrency(m.and, true)}</td>
-                  <td className="num">{formatCurrency(m.raw_land, true)}</td>
-                  <td className="num">{formatCurrency(m.finished_lots, true)}</td>
-                  <td className="num">{formatCurrency(m.land_bucket, true)}</td>
-                  <td className="num font-medium text-fg-strong">{formatCurrency(m.total_all, true)}</td>
-                  <td className={`num ${m.variance >= 0 ? 'positive' : 'negative'}`}>
-                    {i === 0 ? '—' : formatVariance(m.variance)}
-                  </td>
-                  <td className="num text-accent">{formatCurrency(m.total_income, true)}</td>
-                  <td className="num">{formatPct(m.annualized_yield_pct)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <SummaryTable months={months} />
       </div>
+    </div>
+  )
+}
+
+interface SummaryRow {
+  label: string
+  values: number[]
+  // 'currency' = $ formatted; 'pct' = percentage; 'variance' = signed $, blank in column 0
+  kind: 'currency' | 'pct' | 'variance'
+  emphasis?: 'total' | 'accent'  // total = bold/strong fg; accent = accent color
+}
+
+function SummaryTable({ months }: { months: MonthlyBalance[] }) {
+  const rows: SummaryRow[] = [
+    { label: 'SFR',           values: months.map(m => m.sfr),                     kind: 'currency' },
+    { label: 'MFR',           values: months.map(m => m.mfr),                     kind: 'currency' },
+    { label: 'A&D',           values: months.map(m => m.and),                     kind: 'currency' },
+    { label: 'Raw Land',      values: months.map(m => m.raw_land),                kind: 'currency' },
+    { label: 'Fin. Lots',     values: months.map(m => m.finished_lots),           kind: 'currency' },
+    { label: 'Land Bucket',   values: months.map(m => m.land_bucket),             kind: 'currency' },
+    { label: 'Total (All)',   values: months.map(m => m.total_all),               kind: 'currency', emphasis: 'total' },
+    { label: 'Variance',      values: months.map(m => m.variance),                kind: 'variance' },
+    { label: 'Income',        values: months.map(m => m.total_income),            kind: 'currency', emphasis: 'accent' },
+    { label: 'Ann. Yield',    values: months.map(m => m.annualized_yield_pct),    kind: 'pct' },
+  ]
+
+  const renderCell = (row: SummaryRow, v: number, monthIdx: number) => {
+    if (row.kind === 'variance') {
+      if (monthIdx === 0) return <span className="text-fg-dim">—</span>
+      const cls = v >= 0 ? 'text-success-light' : 'text-danger'
+      return <span className={cls}>{formatVariance(v)}</span>
+    }
+    if (row.kind === 'pct') return formatPct(v)
+    return formatCurrency(v, true)
+  }
+
+  const rowEmphasis = (row: SummaryRow) => {
+    if (row.emphasis === 'total')  return 'font-medium text-fg-strong bg-border/30'
+    if (row.emphasis === 'accent') return 'text-accent'
+    return ''
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th className="sticky left-0 z-10 bg-surface">Type / Metric</th>
+            {months.map(m => (
+              <th key={m.month} className="text-right">{m.label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(row => (
+            <tr key={row.label} className={rowEmphasis(row)}>
+              <td className={`sticky left-0 z-10 bg-surface font-medium text-fg ${rowEmphasis(row)}`}>
+                {row.label}
+              </td>
+              {row.values.map((v, i) => (
+                <td key={i} className="num">{renderCell(row, v, i)}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }

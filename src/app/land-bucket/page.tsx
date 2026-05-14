@@ -82,17 +82,17 @@ export default function LandBucketPage() {
     } finally { setBusy(false) }
   }
 
-  if (loading) return <div className="p-6 text-[#8B949E] text-sm">Loading…</div>
+  if (loading) return <div className="p-6 text-fg-dim text-sm">Loading…</div>
 
   return (
     <div className="p-6 space-y-6 max-w-6xl">
       <div className="flex items-center justify-between fade-up fade-up-1">
         <div>
-          <h1 className="text-lg font-medium text-[#E6EDF3] flex items-center gap-2">
-            <Landmark className="w-5 h-5 text-[#D4A853]" />
+          <h1 className="text-lg font-medium text-fg-strong flex items-center gap-2">
+            <Landmark className="w-5 h-5 text-accent" />
             Land Bucket Projects
           </h1>
-          <p className="text-xs text-[#8B949E] mt-0.5">
+          <p className="text-xs text-fg-dim mt-0.5">
             {projects.length} project(s) · edit per-project assumptions or add a new development
           </p>
         </div>
@@ -104,8 +104,8 @@ export default function LandBucketPage() {
       {msg && (
         <div className={`flex items-center gap-2 text-sm p-3 rounded-lg border ${
           msg.type === 'ok'
-            ? 'bg-[#238636]/10 border-[#238636]/30 text-[#3FB950]'
-            : 'bg-[#DA3633]/10 border-[#DA3633]/30 text-[#F85149]'
+            ? 'bg-success/10 border-success/30 text-success-light'
+            : 'bg-danger-strong/10 border-danger-strong/30 text-danger'
         }`}>
           {msg.type === 'ok' ? <CheckCircle className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
           {msg.text}
@@ -113,11 +113,11 @@ export default function LandBucketPage() {
       )}
 
       <div className="card fade-up fade-up-1.5 p-3 mb-2 flex items-center gap-2 flex-wrap">
-        <span className="text-xs font-medium text-[#8B949E] mr-2">Builders:</span>
+        <span className="text-xs font-medium text-fg-dim mr-2">Builders:</span>
         {builders.length === 0
-          ? <span className="text-[10px] text-[#F85149]">No builders found — add one →</span>
+          ? <span className="text-[10px] text-danger">No builders found — add one →</span>
           : builders.map(b => (
-              <span key={b.id} className="text-[10px] px-2 py-0.5 rounded bg-[#21262D] text-[#C9D1D9]">
+              <span key={b.id} className="text-[10px] px-2 py-0.5 rounded bg-border text-fg">
                 {b.name}
               </span>
             ))}
@@ -144,8 +144,8 @@ export default function LandBucketPage() {
             </thead>
             <tbody>
               {projects.length === 0 ? (
-                <tr><td colSpan={11} className="text-center text-xs text-[#8B949E] py-8">
-                  No land bucket projects yet. Click <span className="text-[#D4A853]">New Project</span> to add one.
+                <tr><td colSpan={11} className="text-center text-xs text-fg-dim py-8">
+                  No land bucket projects yet. Click <span className="text-accent">New Project</span> to add one.
                 </td></tr>
               ) : groupByBuilder(projects, builders).map(group => (
                 <BuilderGroup
@@ -193,12 +193,12 @@ function ProjectEditor({
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-[#161B22] border border-[#30363D] rounded-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-4 border-b border-[#21262D]">
-          <div className="text-sm font-medium text-[#E6EDF3]">
+      <div className="bg-surface border border-border-strong rounded-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-4 border-b border-border">
+          <div className="text-sm font-medium text-fg-strong">
             {form.id ? 'Edit Project' : 'New Project'}
           </div>
-          <button onClick={onCancel} className="text-[#8B949E] hover:text-[#F85149]">
+          <button onClick={onCancel} className="text-fg-dim hover:text-danger">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -281,7 +281,7 @@ function ProjectEditor({
           </div>
         </div>
 
-        <div className="flex justify-end gap-2 p-4 border-t border-[#21262D]">
+        <div className="flex justify-end gap-2 p-4 border-t border-border">
           <button onClick={onCancel} className="btn-ghost">Cancel</button>
           <button onClick={onSave} disabled={busy || !form.name.trim()} className="btn-primary">
             <Save className="w-3.5 h-3.5" />
@@ -296,9 +296,9 @@ function ProjectEditor({
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="text-[10px] text-[#8B949E] mb-1">{label}</div>
+      <div className="text-[10px] text-fg-dim mb-1">{label}</div>
       {children}
-      {hint && <div className="text-[10px] text-[#8B949E] mt-0.5 italic">{hint}</div>}
+      {hint && <div className="text-[10px] text-fg-dim mt-0.5 italic">{hint}</div>}
     </div>
   )
 }
@@ -358,7 +358,7 @@ function BuilderAdder({ onAdded }: { onAdded: () => Promise<void> | void }) {
       </button>
       <button onClick={() => { setOpen(false); setName(''); setErr(null) }}
               className="btn-ghost text-[10px] py-0.5 px-2">Cancel</button>
-      {err && <span className="text-[10px] text-[#F85149] ml-1">{err}</span>}
+      {err && <span className="text-[10px] text-danger ml-1">{err}</span>}
     </span>
   )
 }
@@ -410,42 +410,42 @@ function BuilderGroup({
         const lp = programs.find(x => x.id === p.vertical_loan_program_id)
         return (
           <tr key={p.id}>
-            <td className="text-[#C9D1D9] font-medium">{p.name}</td>
+            <td className="text-fg font-medium">{p.name}</td>
             <td>{group.key === '__none__'
-              ? <span className="text-[#8B949E]">—</span>
+              ? <span className="text-fg-dim">—</span>
               : group.builderName}</td>
             <td className="num">{p.total_lots}</td>
             <td className="num">{formatCurrency(p.lot_price, true)}</td>
-            <td className="num">{p.absorption_rate ?? <span className="text-[#8B949E]">builder</span>}</td>
+            <td className="num">{p.absorption_rate ?? <span className="text-fg-dim">builder</span>}</td>
             <td className="num">{formatCurrency(p.balance_outstanding, true)}</td>
             <td className="num">{(p.interest_rate * 100).toFixed(2)}%</td>
             <td className="num">
               {p.vertical_loan_amount != null
                 ? formatCurrency(p.vertical_loan_amount, true)
-                : <span className="text-[#8B949E]">3× lot</span>}
+                : <span className="text-fg-dim">3× lot</span>}
             </td>
-            <td>{lp?.name ?? <span className="text-[#8B949E]">—</span>}</td>
+            <td>{lp?.name ?? <span className="text-fg-dim">—</span>}</td>
             <td className="text-[10px] font-mono">{p.lot_sales_start_date ?? '—'}</td>
             <td className="flex gap-1">
               <button onClick={() => onEdit(p)} className="btn-ghost"><Pencil className="w-3 h-3" /></button>
               <button onClick={() => onDelete(p)} disabled={busy}
-                      className="btn-ghost text-[#F85149]"><Trash2 className="w-3 h-3" /></button>
+                      className="btn-ghost text-danger"><Trash2 className="w-3 h-3" /></button>
             </td>
           </tr>
         )
       })}
-      <tr className="bg-[#21262D]/50 text-[#D4A853] font-medium">
+      <tr className="bg-border/50 text-accent font-medium">
         <td colSpan={2} className="uppercase text-[10px] tracking-wide">
           {group.builderName} subtotal · {group.projects.length} project{group.projects.length === 1 ? '' : 's'}
         </td>
         <td className="num">{subtotal.lots}</td>
-        <td className="num text-[#8B949E]">—</td>
+        <td className="num text-fg-dim">—</td>
         <td className="num">{subtotal.absorption == null ? '—' : subtotal.absorption.toFixed(1)}</td>
         <td className="num">{formatCurrency(subtotal.balance, true)}</td>
-        <td className="num text-[#8B949E]">—</td>
-        <td className="num text-[#8B949E]">—</td>
-        <td className="text-[#8B949E]">—</td>
-        <td className="text-[#8B949E]">—</td>
+        <td className="num text-fg-dim">—</td>
+        <td className="num text-fg-dim">—</td>
+        <td className="text-fg-dim">—</td>
+        <td className="text-fg-dim">—</td>
         <td />
       </tr>
     </>
@@ -455,18 +455,18 @@ function BuilderGroup({
 function GrandTotalRow({ projects }: { projects: LandBucketProject[] }) {
   const total = sumProjects(projects)
   return (
-    <tr className="bg-[#D4A853]/10 text-[#E6EDF3] font-semibold border-t-2 border-[#D4A853]/40">
+    <tr className="bg-accent/10 text-fg-strong font-semibold border-t-2 border-accent/40">
       <td colSpan={2} className="uppercase text-[10px] tracking-wide">
         Grand total · {projects.length} project{projects.length === 1 ? '' : 's'}
       </td>
       <td className="num">{total.lots}</td>
-      <td className="num text-[#8B949E]">—</td>
+      <td className="num text-fg-dim">—</td>
       <td className="num">{total.absorption == null ? '—' : total.absorption.toFixed(1)}</td>
       <td className="num">{formatCurrency(total.balance, true)}</td>
-      <td className="num text-[#8B949E]">—</td>
-      <td className="num text-[#8B949E]">—</td>
-      <td className="text-[#8B949E]">—</td>
-      <td className="text-[#8B949E]">—</td>
+      <td className="num text-fg-dim">—</td>
+      <td className="num text-fg-dim">—</td>
+      <td className="text-fg-dim">—</td>
+      <td className="text-fg-dim">—</td>
       <td />
     </tr>
   )

@@ -82,18 +82,18 @@ export default function AssumptionsPage() {
   const updateProgram = (id: string, patch: Partial<LoanProgram>) =>
     setPrograms(prev => prev.map(p => p.id === id ? { ...p, ...patch } : p))
 
-  if (loading) return <div className="p-6 text-[#8B949E] text-sm">Loading…</div>
+  if (loading) return <div className="p-6 text-fg-dim text-sm">Loading…</div>
   if (!data)   return null
 
   return (
     <div className="p-6 space-y-6 max-w-4xl">
       <div className="flex items-center justify-between fade-up fade-up-1">
         <div>
-          <h1 className="text-lg font-medium text-[#E6EDF3] flex items-center gap-2">
-            <Settings2 className="w-5 h-5 text-[#D4A853]" />
+          <h1 className="text-lg font-medium text-fg-strong flex items-center gap-2">
+            <Settings2 className="w-5 h-5 text-accent" />
             Assumptions
           </h1>
-          <p className="text-xs text-[#8B949E] mt-0.5">Edit forecast variables · changes apply on next Dashboard load</p>
+          <p className="text-xs text-fg-dim mt-0.5">Edit forecast variables · changes apply on next Dashboard load</p>
         </div>
         <button onClick={save} disabled={saving} className="btn-primary">
           <Save className="w-3.5 h-3.5" />
@@ -104,8 +104,8 @@ export default function AssumptionsPage() {
       {msg && (
         <div className={`flex items-center gap-2 text-sm p-3 rounded-lg border ${
           msg.type === 'ok'
-            ? 'bg-[#238636]/10 border-[#238636]/30 text-[#3FB950]'
-            : 'bg-[#DA3633]/10 border-[#DA3633]/30 text-[#F85149]'
+            ? 'bg-success/10 border-success/30 text-success-light'
+            : 'bg-danger-strong/10 border-danger-strong/30 text-danger'
         }`}>
           {msg.type === 'ok' ? <CheckCircle className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
           {msg.text}
@@ -145,7 +145,7 @@ export default function AssumptionsPage() {
 
       {/* NHCF Loan Counts */}
       <Section title="New Originations — Monthly Loan Counts (NHCF)">
-        <p className="text-xs text-[#8B949E] mb-4">
+        <p className="text-xs text-fg-dim mb-4">
           Enter how many new loans each builder funds per month (months 0–11 = current through 12 months out).
         </p>
         <NhcfEditor
@@ -165,40 +165,40 @@ export default function AssumptionsPage() {
 
       {/* Loan Programs — drives new vertical-start cohorts */}
       <Section title="Loan Programs (New Vertical Starts)">
-        <p className="text-xs text-[#8B949E] mb-3">
+        <p className="text-xs text-fg-dim mb-3">
           Draw curve, default rate, and term applied to every new vertical loan cohort.
           When a lot sells, a cohort is originated under the program assigned to that Land
           Bucket project and ramps its balance through this curve.
         </p>
         {programs.length === 0 ? (
-          <div className="text-xs text-[#8B949E]">
+          <div className="text-xs text-fg-dim">
             No loan programs found. Run <code>supabase/migrations/002_modular_assumptions.sql</code>.
           </div>
         ) : (
           <div className="space-y-4">
             {programs.map(p => (
-              <div key={p.id} className="border border-[#30363D] rounded-lg p-3 space-y-2">
+              <div key={p.id} className="border border-border-strong rounded-lg p-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-xs font-medium text-[#C9D1D9]">{p.name}</div>
-                    <div className="text-[10px] text-[#8B949E]">Product type: {p.product_type}</div>
+                    <div className="text-xs font-medium text-fg">{p.name}</div>
+                    <div className="text-[10px] text-fg-dim">Product type: {p.product_type}</div>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <div className="text-[10px] text-[#8B949E] mb-1">Default rate (%)</div>
+                    <div className="text-[10px] text-fg-dim mb-1">Default rate (%)</div>
                     <input type="number" step="0.01" className="form-input text-right"
                            value={(p.default_rate * 100).toFixed(2)}
                            onChange={e => updateProgram(p.id, { default_rate: Number(e.target.value) / 100 })} />
                   </div>
                   <div>
-                    <div className="text-[10px] text-[#8B949E] mb-1">Default term (months)</div>
+                    <div className="text-[10px] text-fg-dim mb-1">Default term (months)</div>
                     <input type="number" className="form-input text-right" value={p.default_term_months}
                            onChange={e => updateProgram(p.id, { default_term_months: Number(e.target.value) || 0 })} />
                   </div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-[#8B949E] mb-1">
+                  <div className="text-[10px] text-fg-dim mb-1">
                     Draw curve (incremental monthly fractions, comma-separated; sum ≈ 1.0)
                   </div>
                   <input
@@ -209,7 +209,7 @@ export default function AssumptionsPage() {
                       if (parts.every(n => !isNaN(n))) updateProgram(p.id, { draw_curve: parts })
                     }}
                   />
-                  <div className="text-[10px] text-[#8B949E] mt-1">
+                  <div className="text-[10px] text-fg-dim mt-1">
                     Months: {p.draw_curve.length} · sum: {p.draw_curve.reduce((a, b) => a + b, 0).toFixed(3)}
                   </div>
                 </div>
@@ -221,9 +221,9 @@ export default function AssumptionsPage() {
 
       {/* Land Bucket — read-only pointer; full editor lives in /land-bucket */}
       <Section title="Land Bucket Developments">
-        <p className="text-xs text-[#8B949E]">
+        <p className="text-xs text-fg-dim">
           Edit land bucket projects and their per-project assumptions on the{' '}
-          <a href="/land-bucket" className="text-[#D4A853] underline">Land Bucket</a> tab.
+          <a href="/land-bucket" className="text-accent underline">Land Bucket</a> tab.
         </p>
       </Section>
     </div>
@@ -243,8 +243,8 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
   return (
     <div className="flex items-center justify-between gap-4">
       <div>
-        <div className="text-xs font-medium text-[#C9D1D9]">{label}</div>
-        {hint && <div className="text-[10px] text-[#8B949E]">{hint}</div>}
+        <div className="text-xs font-medium text-fg">{label}</div>
+        {hint && <div className="text-[10px] text-fg-dim">{hint}</div>}
       </div>
       <div className="w-36 shrink-0">{children}</div>
     </div>
@@ -281,13 +281,13 @@ function NhcfEditor({
         <tbody>
           {builders.map(builder => (
             <tr key={builder}>
-              <td className="text-[#C9D1D9] font-medium capitalize">{builder.replace(/_/g, ' ')}</td>
+              <td className="text-fg font-medium capitalize">{builder.replace(/_/g, ' ')}</td>
               {months.map(m => (
                 <td key={m} className="p-1">
                   <input
                     type="number"
-                    className="w-12 bg-[#0D1117] border border-[#30363D] rounded text-center text-[10px]
-                               text-[#C9D1D9] py-1 focus:outline-none focus:border-[#D4A853]"
+                    className="w-12 bg-bg border border-border-strong rounded text-center text-[10px]
+                               text-fg py-1 focus:outline-none focus:border-accent"
                     value={data[builder]?.[m] || 0}
                     min={0}
                     onChange={e => {

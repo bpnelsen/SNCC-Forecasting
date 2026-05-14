@@ -18,9 +18,9 @@ export default function ForecastPage() {
       .finally(() => setLoading(false))
   }, [])
 
-  if (loading) return <div className="p-6 text-[#8B949E] text-sm">Loading forecast…</div>
+  if (loading) return <div className="p-6 text-fg-dim text-sm">Loading forecast…</div>
   if (error)   return (
-    <div className="p-6 flex gap-2 text-sm text-[#F85149]">
+    <div className="p-6 flex gap-2 text-sm text-danger">
       <AlertCircle className="w-4 h-4 mt-0.5" />{error}
     </div>
   )
@@ -29,11 +29,11 @@ export default function ForecastPage() {
   return (
     <div className="p-6 space-y-6">
       <div className="fade-up fade-up-1">
-        <h1 className="text-lg font-medium text-[#E6EDF3] flex items-center gap-2">
-          <TrendingUp className="w-5 h-5 text-[#D4A853]" />
+        <h1 className="text-lg font-medium text-fg-strong flex items-center gap-2">
+          <TrendingUp className="w-5 h-5 text-accent" />
           New Originations Forecast
         </h1>
-        <p className="text-xs text-[#8B949E] mt-0.5">
+        <p className="text-xs text-fg-dim mt-0.5">
           17-month forward projection · {data.version_label}
         </p>
       </div>
@@ -60,13 +60,13 @@ export default function ForecastPage() {
             <tbody>
               {data.months.map(m => (
                 <tr key={m.month}>
-                  <td className="text-[#C9D1D9] font-medium">{m.label}</td>
-                  <td className="num text-[#56D364]">{formatCurrency(m.forecasted_sfr, true)}</td>
-                  <td className="num text-[#56D364]">{formatCurrency(m.forecasted_mfr, true)}</td>
+                  <td className="text-fg font-medium">{m.label}</td>
+                  <td className="num text-success-bright">{formatCurrency(m.forecasted_sfr, true)}</td>
+                  <td className="num text-success-bright">{formatCurrency(m.forecasted_mfr, true)}</td>
                   <td className="num font-medium">{formatCurrency(m.forecasted_sfr + m.forecasted_mfr, true)}</td>
                   <td className="num">{formatCurrency(m.total_loans, true)}</td>
-                  <td className="num font-medium text-[#D4A853]">{formatCurrency(m.total_all, true)}</td>
-                  <td className="num text-[#D4A853]">{formatCurrency(m.total_income, true)}</td>
+                  <td className="num font-medium text-accent">{formatCurrency(m.total_all, true)}</td>
+                  <td className="num text-accent">{formatCurrency(m.total_income, true)}</td>
                   <td className="num">{formatPct(m.annualized_yield_pct)}</td>
                 </tr>
               ))}
@@ -95,12 +95,12 @@ export default function ForecastPage() {
             <tbody>
               {data.months.map(m => (
                 <tr key={m.month}>
-                  <td className="text-[#C9D1D9] font-medium">{m.label}</td>
+                  <td className="text-fg font-medium">{m.label}</td>
                   <td className="num">{formatCurrency(m.yield_active, true)}</td>
                   <td className="num">{formatCurrency(m.yield_projected, true)}</td>
                   <td className="num">{formatCurrency(m.yield_land_bucket, true)}</td>
-                  <td className="num text-[#3FB950]">{formatCurrency(m.profit_sharing, true)}</td>
-                  <td className="num font-medium text-[#D4A853]">{formatCurrency(m.total_income, true)}</td>
+                  <td className="num text-success-light">{formatCurrency(m.profit_sharing, true)}</td>
+                  <td className="num font-medium text-accent">{formatCurrency(m.total_income, true)}</td>
                 </tr>
               ))}
             </tbody>

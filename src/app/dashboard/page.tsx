@@ -37,8 +37,8 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex items-center justify-between fade-up fade-up-1">
         <div>
-          <h1 className="text-lg font-medium text-[#E6EDF3]">Portfolio Dashboard</h1>
-          <p className="text-xs text-[#8B949E] mt-0.5">
+          <h1 className="text-lg font-medium text-fg-strong">Portfolio Dashboard</h1>
+          <p className="text-xs text-fg-dim mt-0.5">
             {data.version_label} · {data.total_active_loans} active loans · As of {data.as_of_date}
           </p>
         </div>
@@ -65,7 +65,7 @@ export default function DashboardPage() {
         <div className="card xl:col-span-2">
           <div className="card-header">
             <span className="card-title">Total Portfolio Balance</span>
-            <span className="text-[10px] text-[#8B949E] font-mono">
+            <span className="text-[10px] text-fg-dim font-mono">
               {data.months[0]?.label} → {data.months[data.months.length - 1]?.label}
             </span>
           </div>
@@ -92,11 +92,11 @@ export default function DashboardPage() {
                   <div className="flex items-center justify-between text-xs mb-1">
                     <div className="flex items-center gap-1.5">
                       <div className="w-2 h-2 rounded-full" style={{ background: row.color }} />
-                      <span className="text-[#8B949E]">{row.label}</span>
+                      <span className="text-fg-dim">{row.label}</span>
                     </div>
-                    <span className="font-mono text-[#C9D1D9]">{formatCurrency(row.value, true)}</span>
+                    <span className="font-mono text-fg">{formatCurrency(row.value, true)}</span>
                   </div>
-                  <div className="h-1 bg-[#21262D] rounded-full overflow-hidden">
+                  <div className="h-1 bg-border rounded-full overflow-hidden">
                     <div className="h-full rounded-full transition-all duration-500"
                          style={{ width: `${pct * 100}%`, background: row.color }} />
                   </div>
@@ -146,18 +146,18 @@ export default function DashboardPage() {
             <tbody>
               {data.months.map((m, i) => (
                 <tr key={m.month}>
-                  <td className="text-[#C9D1D9] font-medium">{m.label}</td>
+                  <td className="text-fg font-medium">{m.label}</td>
                   <td className="num">{formatCurrency(m.sfr, true)}</td>
                   <td className="num">{formatCurrency(m.mfr, true)}</td>
                   <td className="num">{formatCurrency(m.and, true)}</td>
                   <td className="num">{formatCurrency(m.raw_land, true)}</td>
                   <td className="num">{formatCurrency(m.finished_lots, true)}</td>
                   <td className="num">{formatCurrency(m.land_bucket, true)}</td>
-                  <td className="num font-medium text-[#E6EDF3]">{formatCurrency(m.total_all, true)}</td>
+                  <td className="num font-medium text-fg-strong">{formatCurrency(m.total_all, true)}</td>
                   <td className={`num ${m.variance >= 0 ? 'positive' : 'negative'}`}>
                     {i === 0 ? '—' : formatVariance(m.variance)}
                   </td>
-                  <td className="num text-[#D4A853]">{formatCurrency(m.total_income, true)}</td>
+                  <td className="num text-accent">{formatCurrency(m.total_income, true)}</td>
                   <td className="num">{formatPct(m.annualized_yield_pct)}</td>
                 </tr>
               ))}
@@ -172,7 +172,7 @@ export default function DashboardPage() {
 function LoadingState() {
   return (
     <div className="p-6 space-y-6">
-      <div className="h-6 w-48 bg-[#21262D] rounded animate-pulse" />
+      <div className="h-6 w-48 bg-border rounded animate-pulse" />
       <div className="grid grid-cols-4 gap-3">
         {[1,2,3,4].map(i => <div key={i} className="card h-24 animate-pulse" />)}
       </div>
@@ -187,10 +187,10 @@ function LoadingState() {
 function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <div className="p-6 flex items-start gap-3 text-sm">
-      <AlertCircle className="w-4 h-4 text-[#F85149] mt-0.5 shrink-0" />
+      <AlertCircle className="w-4 h-4 text-danger mt-0.5 shrink-0" />
       <div>
-        <div className="text-[#F85149] font-medium">Failed to load dashboard</div>
-        <div className="text-[#8B949E] mt-1">{message}</div>
+        <div className="text-danger font-medium">Failed to load dashboard</div>
+        <div className="text-fg-dim mt-1">{message}</div>
         <button onClick={onRetry} className="btn-secondary mt-3">Retry</button>
       </div>
     </div>

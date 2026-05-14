@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, TrendingUp, Settings2, Upload, History, Building2, Landmark, ClipboardList,
 } from 'lucide-react'
+import { ThemeToggle } from '@/components/ui/ThemeToggle'
 
 const nav = [
   { href: '/dashboard',    label: 'Dashboard',       icon: LayoutDashboard },
@@ -19,16 +20,16 @@ const nav = [
 export function Navigation() {
   const path = usePathname()
   return (
-    <nav className="w-52 shrink-0 flex flex-col bg-[#161B22] border-r border-[#21262D] py-5">
+    <nav className="w-52 shrink-0 flex flex-col bg-surface border-r border-border py-5">
       {/* Logo */}
       <div className="px-5 mb-7">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-[#D4A853]/20 flex items-center justify-center">
-            <Building2 className="w-4 h-4 text-[#D4A853]" />
+          <div className="w-7 h-7 rounded-lg bg-accent/20 flex items-center justify-center">
+            <Building2 className="w-4 h-4 text-accent" />
           </div>
           <div>
-            <div className="text-xs font-semibold text-[#E6EDF3] leading-none">SNCC</div>
-            <div className="text-[10px] text-[#8B949E] leading-none mt-0.5">Forecasting</div>
+            <div className="text-xs font-semibold text-fg-strong leading-none">SNCC</div>
+            <div className="text-[10px] text-fg-dim leading-none mt-0.5">Forecasting</div>
           </div>
         </div>
       </div>
@@ -44,8 +45,8 @@ export function Navigation() {
               className={`
                 flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all
                 ${active
-                  ? 'bg-[#D4A853]/15 text-[#D4A853]'
-                  : 'text-[#8B949E] hover:text-[#C9D1D9] hover:bg-[#21262D]'
+                  ? 'bg-accent/15 text-accent'
+                  : 'text-fg-dim hover:text-fg hover:bg-border'
                 }
               `}
             >
@@ -57,9 +58,12 @@ export function Navigation() {
       </div>
 
       {/* Footer */}
-      <div className="px-5 pt-4 border-t border-[#21262D]">
-        <div className="text-[10px] text-[#8B949E]">Security National</div>
-        <div className="text-[10px] text-[#30363D]">Financial Corporation</div>
+      <div className="px-5 pt-4 border-t border-border space-y-2">
+        <ThemeToggle />
+        <div>
+          <div className="text-[10px] text-fg-dim">Security National</div>
+          <div className="text-[10px] text-border-strong">Financial Corporation</div>
+        </div>
       </div>
     </nav>
   )

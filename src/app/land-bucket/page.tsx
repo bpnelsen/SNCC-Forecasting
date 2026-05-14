@@ -263,14 +263,12 @@ function ProjectEditor({
           </Field>
 
           <div className="col-span-2">
-            <Field label="Manual Lot Release Schedule"
-                   hint='Optional. When non-empty overrides absorption. Format: {"2025-07": 3, "2025-08": 4}'>
-              <textarea className="form-input h-24 text-xs font-mono resize-y"
-                        value={JSON.stringify(form.lot_release_schedule ?? {}, null, 2)}
-                        onChange={e => {
-                          try { u({ lot_release_schedule: JSON.parse(e.target.value) }) } catch {}
-                        }} />
-            </Field>
+            <LotReleaseScheduleEditor
+              startDate={form.lot_sales_start_date}
+              totalLots={form.total_lots}
+              value={form.lot_release_schedule ?? {}}
+              onChange={v => u({ lot_release_schedule: v })}
+            />
           </div>
 
           <div className="col-span-2">
@@ -299,6 +297,120 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
       <div className="text-[10px] text-fg-dim mb-1">{label}</div>
       {children}
       {hint && <div className="text-[10px] text-fg-dim mt-0.5 italic">{hint}</div>}
+    </div>
+  )
+}
+
+// Per-month grid replacing the old JSON textarea. The grid starts at the
+// project's Lot Sales Start month and runs forward for HORIZON_MONTHS. Any
+// existing entries outside that window (e.g. the user changed the start date
+// after entering values) are still preserved on the row and listed below the
+// grid so they don't silently disappear.
+const HORIZON_MONTHS = 24
+
+function nextMonthKey(year: number, monthIdx0: number): string {
+  // monthIdx0 is 0-based (Jan = 0). Returns 'YYYY-MM'.
+  const y = year + Math.floor(monthIdx0 / 12)
+  const m = ((monthIdx0 % 12) + 12) % 12
+  return `${y}-${String(m + 1).padStart(2, '0')}`
+}
+
+function generateMonthList(startDate: string, count: number): string[] {
+  // startDate is 'YYYY-MM-DD'. Returns N consecutive month keys 'YYYY-MM'.
+  const [y, m] = startDate.split('-').map(Number)
+  return Array.from({ length: count }, (_, i) => nextMonthKey(y, (m - 1) + i))
+}
+
+function LotReleaseScheduleEditor({
+  startDate, totalLots, value, onChange,
+}: {
+  startDate: string | null
+  totalLots: number
+  value: Record<string, number>
+  onChange: (v: Record<string, number>) => void
+}) {
+  const months = startDate ? generateMonthList(startDate, HORIZON_MONTHS) : []
+  const monthsSet = new Set(months)
+  // Any stored entries that fall outside the generated window — usually because
+  // the user moved Lot Sales Start later — kept visible so nothing is lost.
+  const orphanKeys = Object.keys(value).filter(k => !monthsSet.has(k)).sort()
+
+  const total = Object.values(value).reduce((s, n) => s + (Number(n) || 0), 0)
+
+  const set = (monthKey: string, lots: number) => {
+    const next = { ...value }
+    if (lots > 0) next[monthKey] = lots
+    else delete next[monthKey]
+    onChange(next)
+  }
+  const clearAll = () => onChange({})
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <div className="text-[10px] text-fg-dim">Manual Lot Release Schedule</div>
+        <div className="flex items-center gap-2 text-[10px] text-fg-dim">
+          <span>
+            Scheduled: <span className="text-fg font-mono">{total}</span>
+            {totalLots > 0 && <> / <span className="font-mono">{totalLots}</span></>}
+          </span>
+          {Object.keys(value).length > 0 && (
+            <button type="button" onClick={clearAll} className="btn-ghost text-[10px] py-0.5 px-1.5">
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      {!startDate ? (
+        <div className="text-[10px] text-fg-dim italic">
+          Set <strong>Lot Sales Start</strong> above to populate the per-month schedule.
+        </div>
+      ) : (
+        <div className="grid grid-cols-4 gap-2 p-3 rounded border border-border-strong">
+          {months.map(monthKey => (
+            <label key={monthKey} className="flex items-center gap-2">
+              <span className="text-[10px] font-mono text-fg-dim w-14 shrink-0">{monthKey}</span>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                className="form-input text-right text-xs py-1 px-2"
+                value={value[monthKey] ?? 0}
+                onChange={e => set(monthKey, Math.max(0, parseInt(e.target.value) || 0))}
+              />
+            </label>
+          ))}
+        </div>
+      )}
+
+      {orphanKeys.length > 0 && (
+        <div className="mt-2 p-2 rounded border border-danger/40 bg-danger/5">
+          <div className="text-[10px] text-danger mb-1">
+            {orphanKeys.length} entr{orphanKeys.length === 1 ? 'y' : 'ies'} outside the current Lot Sales Start window:
+          </div>
+          <div className="grid grid-cols-4 gap-2">
+            {orphanKeys.map(k => (
+              <label key={k} className="flex items-center gap-2">
+                <span className="text-[10px] font-mono text-fg-dim w-14 shrink-0">{k}</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  className="form-input text-right text-xs py-1 px-2"
+                  value={value[k] ?? 0}
+                  onChange={e => set(k, Math.max(0, parseInt(e.target.value) || 0))}
+                />
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="text-[10px] text-fg-dim mt-1 italic">
+        Optional. When any value is non-zero, this schedule overrides the absorption rate.
+        Set every month to 0 (or click Clear) to fall back to absorption.
+      </div>
     </div>
   )
 }

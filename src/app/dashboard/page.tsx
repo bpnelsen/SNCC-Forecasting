@@ -1,16 +1,70 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { StatCard } from '@/components/ui/StatCard'
 import { TotalBalanceChart, PortfolioStackedChart, IncomeChart, VarianceChart } from '@/components/charts/PortfolioCharts'
-import { ForecastResult } from '@/lib/types'
+import { ForecastResult, MonthlyBalance } from '@/lib/types'
 import { formatCurrency, formatPct, formatVariance } from '@/lib/utils'
-import { RefreshCw, AlertCircle } from 'lucide-react'
+import { RefreshCw, AlertCircle, Filter } from 'lucide-react'
+
+// The set of toggleable product/category buckets shown in the dashboard.
+// Land Bucket isn't a "product type" per se but it sits next to the loan
+// segments in every chart, so it lives in the same filter strip.
+type FilterKey = 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh' | 'land_bucket'
+
+interface FilterChip {
+  key: FilterKey
+  label: string
+  color: string
+}
+
+const CHIPS: FilterChip[] = [
+  { key: 'sfr',           label: 'SFR',           color: '#58A6FF' },
+  { key: 'mfr',           label: 'MFR',           color: '#D4A853' },
+  { key: 'and',           label: 'A&D',           color: '#3FB950' },
+  { key: 'raw_land',      label: 'Raw Land',      color: '#8B949E' },
+  { key: 'finished_lots', label: 'Finished Lots', color: '#A371F7' },
+  { key: 'hhh',           label: 'HHH/JV',        color: '#F85149' },
+  { key: 'land_bucket',   label: 'Land Bucket',   color: '#79C0FF' },
+]
+
+const ALL_KEYS = new Set<FilterKey>(CHIPS.map(c => c.key))
+
+// Zero out segments not in `active`, then recompute total_loans, total_all,
+// and variance month-over-month from the filtered values. The calculator's
+// other per-month fields (income, yields) are kept as-is — filtering is a
+// presentation-layer slice of balances, not a re-run of the engine.
+function applyFilter(months: MonthlyBalance[], active: Set<FilterKey>): MonthlyBalance[] {
+  let prev = 0
+  return months.map((m, i) => {
+    const filtered: MonthlyBalance = {
+      ...m,
+      sfr:           active.has('sfr')           ? m.sfr           : 0,
+      mfr:           active.has('mfr')           ? m.mfr           : 0,
+      and:           active.has('and')           ? m.and           : 0,
+      raw_land:      active.has('raw_land')      ? m.raw_land      : 0,
+      finished_lots: active.has('finished_lots') ? m.finished_lots : 0,
+      hhh:           active.has('hhh')           ? m.hhh           : 0,
+      land_bucket:   active.has('land_bucket')   ? m.land_bucket   : 0,
+      total_loans: 0,
+      total_all:   0,
+      variance:    0,
+    }
+    filtered.total_loans =
+      filtered.sfr + filtered.mfr + filtered.and +
+      filtered.raw_land + filtered.finished_lots + filtered.hhh
+    filtered.total_all = filtered.total_loans + filtered.land_bucket
+    filtered.variance = i === 0 ? 0 : filtered.total_all - prev
+    prev = filtered.total_all
+    return filtered
+  })
+}
 
 export default function DashboardPage() {
   const [data, setData]       = useState<ForecastResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
+  const [active, setActive]   = useState<Set<FilterKey>>(new Set(ALL_KEYS))
 
   const load = async () => {
     setLoading(true); setError(null)
@@ -25,12 +79,27 @@ export default function DashboardPage() {
 
   useEffect(() => { load() }, [])
 
+  const months = useMemo(
+    () => data ? applyFilter(data.months, active) : [],
+    [data, active],
+  )
+
   if (loading) return <LoadingState />
   if (error)   return <ErrorState message={error} onRetry={load} />
   if (!data)   return null
 
-  const current = data.months[0]
-  const peak    = data.months.reduce((a, b) => b.total_all > a.total_all ? b : a, data.months[0])
+  const current = months[0]
+  const peak    = months.reduce((a, b) => b.total_all > a.total_all ? b : a, months[0])
+  const filtered = active.size < CHIPS.length
+
+  const toggle = (key: FilterKey) => {
+    const next = new Set(active)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    setActive(next)
+  }
+  const setAll  = () => setActive(new Set(ALL_KEYS))
+  const setNone = () => setActive(new Set())
 
   return (
     <div className="p-6 space-y-6">
@@ -47,14 +116,46 @@ export default function DashboardPage() {
         </button>
       </div>
 
+      {/* Filter strip */}
+      <div className="card fade-up fade-up-1 p-3 flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1.5 text-xs text-fg-dim mr-1">
+          <Filter className="w-3.5 h-3.5" />
+          <span>Product types:</span>
+        </div>
+        {CHIPS.map(chip => {
+          const on = active.has(chip.key)
+          return (
+            <button
+              key={chip.key}
+              onClick={() => toggle(chip.key)}
+              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium
+                          border transition-all
+                          ${on
+                            ? 'border-border-strong text-fg bg-surface'
+                            : 'border-border text-fg-dim opacity-60 hover:opacity-100'}`}
+              title={on ? `Hide ${chip.label}` : `Show ${chip.label}`}
+            >
+              <span className="w-2 h-2 rounded-full"
+                    style={{ background: on ? chip.color : 'transparent', border: `1px solid ${chip.color}` }} />
+              {chip.label}
+            </button>
+          )
+        })}
+        <div className="flex items-center gap-1 ml-auto">
+          <button onClick={setAll}  className="btn-ghost text-[10px]">All</button>
+          <button onClick={setNone} className="btn-ghost text-[10px]">None</button>
+        </div>
+      </div>
+
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 fade-up fade-up-2">
-        <StatCard label="Total Portfolio (All)" value={formatCurrency(current.total_all, true)}
+        <StatCard label={filtered ? 'Total Portfolio (filtered)' : 'Total Portfolio (All)'}
+          value={formatCurrency(current.total_all, true)}
           delta={`Peak: ${formatCurrency(peak.total_all, true)} (${peak.label})`} accent />
         <StatCard label="Active Loans" value={formatCurrency(current.total_loans, true)}
           subLabel={`${data.total_active_loans} loans`} />
         <StatCard label="Land Bucket" value={formatCurrency(current.land_bucket, true)}
-          delta={formatVariance(current.land_bucket - (data.months[1]?.land_bucket || 0))} />
+          delta={formatVariance(current.land_bucket - (months[1]?.land_bucket || 0))} />
         <StatCard label="Monthly Income" value={formatCurrency(current.total_income, true)}
           delta={formatPct(current.annualized_yield_pct)} subLabel="annualized yield"
           deltaPositive={current.annualized_yield_pct > 0.08} />
@@ -66,10 +167,10 @@ export default function DashboardPage() {
           <div className="card-header">
             <span className="card-title">Total Portfolio Balance</span>
             <span className="text-[10px] text-fg-dim font-mono">
-              {data.months[0]?.label} → {data.months[data.months.length - 1]?.label}
+              {months[0]?.label} → {months[months.length - 1]?.label}
             </span>
           </div>
-          <div className="p-4"><TotalBalanceChart data={data.months} /></div>
+          <div className="p-4"><TotalBalanceChart data={months} /></div>
         </div>
 
         <div className="card">
@@ -111,15 +212,15 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 fade-up fade-up-4">
         <div className="card">
           <div className="card-header"><span className="card-title">Portfolio by Type</span></div>
-          <div className="p-4"><PortfolioStackedChart data={data.months} /></div>
+          <div className="p-4"><PortfolioStackedChart data={months} /></div>
         </div>
         <div className="card">
           <div className="card-header"><span className="card-title">Monthly Variance</span></div>
-          <div className="p-4"><VarianceChart data={data.months} /></div>
+          <div className="p-4"><VarianceChart data={months} /></div>
         </div>
         <div className="card">
           <div className="card-header"><span className="card-title">Monthly Income</span></div>
-          <div className="p-4"><IncomeChart data={data.months} /></div>
+          <div className="p-4"><IncomeChart data={months} /></div>
         </div>
       </div>
 
@@ -144,7 +245,7 @@ export default function DashboardPage() {
               </tr>
             </thead>
             <tbody>
-              {data.months.map((m, i) => (
+              {months.map((m, i) => (
                 <tr key={m.month}>
                   <td className="text-fg font-medium">{m.label}</td>
                   <td className="num">{formatCurrency(m.sfr, true)}</td>

@@ -247,15 +247,15 @@ export function runForecast(input: ForecastInput): ForecastResult {
   const lb = runLandBucket(input.landBucketProjects, buildersById, programsById, months)
   const monthIndexByKey = new Map(months.map((m, i) => [m.key, i]))
 
-  // Translate user-entered new origination schedule rows into the same cohort
-  // shape as land-bucket-driven originations. Each row becomes a cohort at its
-  // month with loan_count loans of avg_loan_amount each. Program resolution
-  // order: explicit loan_program_id on the row → builder.default_loan_program_id.
-  // If neither resolves we skip the row (no curve to draw against).
-  // Fallback program used when an entry has no explicit program and the builder
-  // has no default (e.g. builders added via the quick inline adder). Prefer an
-  // SF construction program — vertical starts are overwhelmingly SF — then any
-  // program at all. Only when zero programs exist do we have nothing to draw.
+  // Expand each new-origination entry into a recurring series of monthly
+  // cohorts that draws down a lot pool. The series starts at entry.month and
+  // originates loans every month (fixed loan_count, or monthly_schedule lookup)
+  // until cumulative count reaches total_lots OR end_month passes, whichever
+  // comes first. No cap and no end_month → bounded only by the horizon.
+  //
+  // Program resolution: explicit loan_program_id → builder default → first SF
+  // program → first program. Only with zero programs configured is an entry
+  // skipped (nothing to draw a curve against).
   const fallbackProgram =
     input.loanPrograms.find(p => p.product_type === 'SF') ??
     input.loanPrograms[0] ??
@@ -263,21 +263,41 @@ export function runForecast(input: ForecastInput): ForecastResult {
 
   const scheduledOriginations: LotOrigination[] = []
   for (const entry of input.newOriginations) {
-    if (entry.loan_count <= 0 || entry.avg_loan_amount <= 0) continue
-    const idx = monthIndexByKey.get(entry.month)
-    if (idx === undefined) continue  // outside forecast horizon
+    if (entry.avg_loan_amount <= 0) continue
+    const startIdx = monthIndexByKey.get(entry.month)
+    if (startIdx === undefined) continue  // series starts outside the horizon
+
     const programId = entry.loan_program_id
       ?? buildersById.get(entry.builder_id)?.default_loan_program_id
       ?? null
     const program = (programId ? programsById.get(programId) : undefined) ?? fallbackProgram
-    if (!program) continue  // no loan programs configured at all
-    scheduledOriginations.push({
-      origination_month_idx: idx,
-      count: entry.loan_count,
-      max_amount_per_loan: entry.avg_loan_amount,
-      program,
-      project_id: entry.land_bucket_project_id ?? entry.id,
-    })
+    if (!program) continue
+
+    const cap = entry.total_lots && entry.total_lots > 0 ? entry.total_lots : Infinity
+    // end_month is inclusive; an unparseable / out-of-horizon value just means
+    // "no calendar stop within the horizon".
+    const endIdxRaw = entry.end_month ? monthIndexByKey.get(entry.end_month) : undefined
+    const lastIdx = endIdxRaw === undefined ? months.length - 1 : endIdxRaw
+    const schedule = entry.monthly_mode === 'schedule' ? (entry.monthly_schedule ?? {}) : null
+
+    let cumulative = 0
+    for (let i = startIdx; i <= lastIdx && i < months.length; i++) {
+      if (cumulative >= cap) break
+      const monthlyCount = schedule
+        ? Math.max(0, Math.floor(Number(schedule[months[i].key]) || 0))
+        : Math.max(0, Math.floor(entry.loan_count))
+      if (monthlyCount <= 0) continue
+      const take = Math.min(monthlyCount, cap - cumulative)
+      if (take <= 0) break
+      cumulative += take
+      scheduledOriginations.push({
+        origination_month_idx: i,
+        count: take,
+        max_amount_per_loan: entry.avg_loan_amount,
+        program,
+        project_id: entry.land_bucket_project_id ?? entry.id,
+      })
+    }
   }
   const allOriginations: LotOrigination[] = [...lb.lotOriginations, ...scheduledOriginations]
 

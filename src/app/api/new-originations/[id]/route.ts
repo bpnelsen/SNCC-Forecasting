@@ -14,6 +14,14 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     if (body.loan_count !== undefined)             payload.loan_count = Number(body.loan_count) || 0
     if (body.avg_loan_amount !== undefined)        payload.avg_loan_amount = Number(body.avg_loan_amount) || 0
     if (body.loan_program_id !== undefined)        payload.loan_program_id = body.loan_program_id || null
+    if (body.total_lots !== undefined)
+      payload.total_lots = body.total_lots === '' || body.total_lots == null ? null : Number(body.total_lots)
+    if (body.end_month !== undefined)
+      payload.end_month = body.end_month && /^\d{4}-\d{2}$/.test(String(body.end_month)) ? body.end_month : null
+    if (body.monthly_mode !== undefined)
+      payload.monthly_mode = body.monthly_mode === 'schedule' ? 'schedule' : 'fixed'
+    if (body.monthly_schedule !== undefined)
+      payload.monthly_schedule = body.monthly_schedule ?? {}
     if (body.notes !== undefined)                  payload.notes = body.notes || null
 
     const { error } = await sb

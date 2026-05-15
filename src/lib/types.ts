@@ -176,10 +176,20 @@ export interface NewOriginationEntry {
   // Free-text development name. When the user picks an existing project from
   // the autocomplete, both this and land_bucket_project_id are populated.
   development_name: string | null
-  month: string  // 'YYYY-MM'
+  // Series start month, 'YYYY-MM'.
+  month: string
+  // Per-month loans started when monthly_mode = 'fixed'.
   loan_count: number
   avg_loan_amount: number
   loan_program_id: string | null
+  // Cap on cumulative loans started by this entry. null / 0 = no cap.
+  total_lots: number | null
+  // Inclusive calendar stop, 'YYYY-MM'. null = no date stop.
+  end_month: string | null
+  // 'fixed' = loan_count every month; 'schedule' = monthly_schedule lookup.
+  monthly_mode: 'fixed' | 'schedule'
+  // { 'YYYY-MM': count } used when monthly_mode = 'schedule'.
+  monthly_schedule: Record<string, number>
   notes: string | null
 }
 

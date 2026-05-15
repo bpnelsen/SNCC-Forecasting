@@ -89,6 +89,9 @@ export interface MonthlyBalance {
   new_originations_mfr: number
   forecasted_sfr: number
   forecasted_mfr: number
+  // Outstanding balance contributed by ALL forecasted new-origination cohorts
+  // (every product type), not just SF + MF.
+  forecasted_total: number
   yield_active: number
   yield_projected: number
   yield_land_bucket: number

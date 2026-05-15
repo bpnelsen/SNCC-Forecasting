@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'month is required (YYYY-MM)' }, { status: 400 })
     }
 
+    const mode = body.monthly_mode === 'schedule' ? 'schedule' : 'fixed'
     const sb = createServiceClient()
     const payload = {
       builder_id:             body.builder_id,
@@ -34,6 +35,12 @@ export async function POST(req: NextRequest) {
       loan_count:             Number(body.loan_count) || 0,
       avg_loan_amount:        Number(body.avg_loan_amount) || 0,
       loan_program_id:        body.loan_program_id || null,
+      total_lots:             body.total_lots === '' || body.total_lots == null
+                                ? null : Number(body.total_lots),
+      end_month:              body.end_month && /^\d{4}-\d{2}$/.test(String(body.end_month))
+                                ? body.end_month : null,
+      monthly_mode:           mode,
+      monthly_schedule:       mode === 'schedule' ? (body.monthly_schedule ?? {}) : {},
       notes:                  body.notes || null,
     }
 

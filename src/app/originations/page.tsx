@@ -17,8 +17,45 @@ const emptyForm = (): FormState => ({
   loan_count: 0,
   avg_loan_amount: 0,
   loan_program_id: null,
+  total_lots: null,
+  end_month: null,
+  monthly_mode: 'fixed',
+  monthly_schedule: {},
   notes: null,
 })
+
+// Expand a series into [{ key, count }] respecting cap + end month, so the
+// table and editor preview agree with the calculator's expansion logic.
+function expandSeries(e: {
+  month: string
+  loan_count: number
+  total_lots: number | null
+  end_month: string | null
+  monthly_mode: 'fixed' | 'schedule'
+  monthly_schedule: Record<string, number>
+}, horizon = 36): { key: string; count: number }[] {
+  const out: { key: string; count: number }[] = []
+  const cap = e.total_lots && e.total_lots > 0 ? e.total_lots : Infinity
+  let [y, m] = e.month.split('-').map(Number)
+  if (!y || !m) return out
+  let cumulative = 0
+  for (let i = 0; i < horizon && cumulative < cap; i++) {
+    const key = `${y}-${String(m).padStart(2, '0')}`
+    if (e.end_month && key > e.end_month) break
+    const monthly = e.monthly_mode === 'schedule'
+      ? Math.max(0, Math.floor(Number(e.monthly_schedule?.[key]) || 0))
+      : Math.max(0, Math.floor(e.loan_count))
+    if (monthly > 0) {
+      const take = Math.min(monthly, cap - cumulative)
+      if (take <= 0) break
+      out.push({ key, count: take })
+      cumulative += take
+    }
+    m += 1
+    if (m > 12) { m = 1; y += 1 }
+  }
+  return out
+}
 
 // First of next month in YYYY-MM. Most plans are for future starts.
 function defaultMonth(): string {
@@ -134,18 +171,19 @@ export default function OriginationsPage() {
               <tr>
                 <th>Builder</th>
                 <th>Development</th>
-                <th>Month</th>
-                <th className="text-right">Loan Count</th>
+                <th>Start</th>
+                <th>Stop</th>
+                <th className="text-right">Per Month</th>
+                <th className="text-right">Total Loans</th>
                 <th className="text-right">Avg Loan ($)</th>
                 <th className="text-right">Total ($)</th>
                 <th>Loan Program</th>
-                <th>Notes</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {entries.length === 0 ? (
-                <tr><td colSpan={9} className="text-center text-xs text-fg-dim py-8">
+                <tr><td colSpan={10} className="text-center text-xs text-fg-dim py-8">
                   No new-origination entries yet. Click <span className="text-accent">New Entry</span> to add one.
                 </td></tr>
               ) : grouped.map(builderGroup => (
@@ -160,13 +198,13 @@ export default function OriginationsPage() {
               ))}
               {entries.length > 0 && (
                 <tr className="bg-accent/10 text-fg-strong font-semibold border-t-2 border-accent/40">
-                  <td colSpan={3} className="uppercase text-[10px] tracking-wide">
+                  <td colSpan={4} className="uppercase text-[10px] tracking-wide">
                     Grand total · {entries.length} entr{entries.length === 1 ? 'y' : 'ies'}
                   </td>
+                  <td className="num text-fg-dim">—</td>
                   <td className="num">{grand.count}</td>
                   <td className="num text-fg-dim">—</td>
                   <td className="num">{formatCurrency(grand.amount, true)}</td>
-                  <td className="text-fg-dim">—</td>
                   <td className="text-fg-dim">—</td>
                   <td />
                 </tr>
@@ -243,13 +281,28 @@ function groupEntries(
   return out
 }
 
+// Total loans / dollars an entry originates over its whole capped series.
+function seriesTotals(e: NewOriginationEntry): { count: number; amount: number } {
+  const count = expandSeries(e).reduce((s, x) => s + x.count, 0)
+  return { count, amount: count * e.avg_loan_amount }
+}
+
 function sumEntries(entries: NewOriginationEntry[]) {
   let count = 0, amount = 0
   for (const e of entries) {
-    count += e.loan_count
-    amount += e.loan_count * e.avg_loan_amount
+    const t = seriesTotals(e)
+    count += t.count
+    amount += t.amount
   }
   return { count, amount }
+}
+
+// Human-readable stop summary for the table.
+function stopLabel(e: NewOriginationEntry): string {
+  const parts: string[] = []
+  if (e.total_lots && e.total_lots > 0) parts.push(`${e.total_lots} cap`)
+  if (e.end_month) parts.push(`by ${e.end_month}`)
+  return parts.length ? parts.join(' · ') : 'horizon'
 }
 
 function BuilderBlock({
@@ -271,6 +324,10 @@ function BuilderBlock({
           <>
             {proj.entries.map(e => {
               const prog = programs.find(p => p.id === e.loan_program_id)
+              const t = seriesTotals(e)
+              const perMonth = e.monthly_mode === 'schedule'
+                ? 'schedule'
+                : `${e.loan_count}/mo`
               return (
                 <tr key={e.id}>
                   <td className="text-fg font-medium">{group.builderName}</td>
@@ -278,11 +335,12 @@ function BuilderBlock({
                     ? <span className="text-fg-dim">—</span>
                     : proj.projectName}</td>
                   <td className="font-mono text-[10px]">{e.month}</td>
-                  <td className="num">{e.loan_count}</td>
+                  <td className="text-[10px]">{stopLabel(e)}</td>
+                  <td className="num text-[10px]">{perMonth}</td>
+                  <td className="num">{t.count}</td>
                   <td className="num">{formatCurrency(e.avg_loan_amount, true)}</td>
-                  <td className="num">{formatCurrency(e.loan_count * e.avg_loan_amount, true)}</td>
+                  <td className="num">{formatCurrency(t.amount, true)}</td>
                   <td>{prog?.name ?? <span className="text-fg-dim">builder default</span>}</td>
-                  <td className="text-[10px] max-w-xs truncate">{e.notes ?? '—'}</td>
                   <td className="flex gap-1">
                     <button onClick={() => onEdit(e)} className="btn-ghost">
                       <Pencil className="w-3 h-3" />
@@ -299,24 +357,25 @@ function BuilderBlock({
               <tr key={proj.key + '-sub'} className="bg-surface text-fg-dim text-[10px]">
                 <td />
                 <td className="italic uppercase tracking-wide">{proj.projectName} subtotal</td>
-                <td />
+                <td colSpan={3} />
                 <td className="num">{projSubtotal.count}</td>
                 <td className="num">—</td>
                 <td className="num">{formatCurrency(projSubtotal.amount, true)}</td>
-                <td colSpan={3} />
+                <td colSpan={2} />
               </tr>
             )}
           </>
         )
       })}
       <tr className="bg-border/50 text-accent font-medium">
-        <td colSpan={3} className="uppercase text-[10px] tracking-wide">
+        <td colSpan={4} className="uppercase text-[10px] tracking-wide">
           {group.builderName} subtotal · {builderEntries.length} entr{builderEntries.length === 1 ? 'y' : 'ies'}
         </td>
+        <td className="num text-fg-dim">—</td>
         <td className="num">{builderSubtotal.count}</td>
         <td className="num text-fg-dim">—</td>
         <td className="num">{formatCurrency(builderSubtotal.amount, true)}</td>
-        <td colSpan={3} />
+        <td colSpan={2} />
       </tr>
     </>
   )
@@ -389,7 +448,7 @@ function EntryEditor({
             </div>
           </div>
           <div>
-            <div className="text-[10px] text-fg-dim mb-1">Month (YYYY-MM)</div>
+            <div className="text-[10px] text-fg-dim mb-1">Start Month (YYYY-MM)</div>
             <input type="month" className="form-input" value={form.month}
                    onChange={e => u({ month: e.target.value })} />
           </div>
@@ -401,18 +460,82 @@ function EntryEditor({
               {programs.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>
-          <div>
-            <div className="text-[10px] text-fg-dim mb-1">Loan Count</div>
-            <input type="number" className="form-input text-right" value={form.loan_count}
-                   onChange={e => u({ loan_count: Number(e.target.value) || 0 })} />
+
+          <div className="col-span-2 border-t border-border pt-3 mt-1">
+            <div className="text-[10px] text-fg-dim uppercase tracking-wide mb-2">Monthly starts &amp; stop</div>
+            <div className="flex gap-2 mb-3">
+              {(['fixed', 'schedule'] as const).map(mode => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => u({ monthly_mode: mode })}
+                  className={`px-3 py-1 rounded-full text-[10px] font-medium border transition-all
+                    ${form.monthly_mode === mode
+                      ? 'border-border-strong text-fg bg-bg'
+                      : 'border-border text-fg-dim opacity-60 hover:opacity-100'}`}
+                >
+                  {mode === 'fixed' ? 'Fixed / month' : 'Specific per month'}
+                </button>
+              ))}
+            </div>
           </div>
+
+          {form.monthly_mode === 'fixed' && (
+            <div>
+              <div className="text-[10px] text-fg-dim mb-1">Loans per month</div>
+              <input type="number" min={0} className="form-input text-right" value={form.loan_count}
+                     onChange={e => u({ loan_count: Number(e.target.value) || 0 })} />
+            </div>
+          )}
           <div>
             <div className="text-[10px] text-fg-dim mb-1">Avg Loan Amount ($)</div>
             <input type="number" step="1000" className="form-input text-right" value={form.avg_loan_amount}
                    onChange={e => u({ avg_loan_amount: Number(e.target.value) || 0 })} />
           </div>
-          <div className="col-span-2 text-[10px] text-fg-dim">
-            Total: {formatCurrency(form.loan_count * form.avg_loan_amount, false)}
+          <div>
+            <div className="text-[10px] text-fg-dim mb-1">Total Lots Cap (optional)</div>
+            <input type="number" min={0} className="form-input text-right"
+                   placeholder="no cap"
+                   value={form.total_lots ?? ''}
+                   onChange={e => u({ total_lots: e.target.value === '' ? null : Number(e.target.value) })} />
+            <div className="text-[10px] text-fg-dim mt-0.5 italic">Stops once this many loans started.</div>
+          </div>
+          <div>
+            <div className="text-[10px] text-fg-dim mb-1">End Month (optional)</div>
+            <input type="month" className="form-input"
+                   value={form.end_month ?? ''}
+                   onChange={e => u({ end_month: e.target.value || null })} />
+            <div className="text-[10px] text-fg-dim mt-0.5 italic">Inclusive calendar stop.</div>
+          </div>
+
+          {form.monthly_mode === 'schedule' && (
+            <div className="col-span-2">
+              <ScheduleGrid
+                startMonth={form.month}
+                endMonth={form.end_month}
+                value={form.monthly_schedule ?? {}}
+                onChange={v => u({ monthly_schedule: v })}
+              />
+            </div>
+          )}
+
+          <div className="col-span-2 text-[10px] rounded border border-border-strong p-2 bg-bg">
+            {(() => {
+              const series = expandSeries(form)
+              const totalLoans = series.reduce((s, x) => s + x.count, 0)
+              if (totalLoans === 0) {
+                return <span className="text-fg-dim">No loans scheduled — set per-month counts, a cap, or a start month inside the horizon.</span>
+              }
+              const first = series[0].key
+              const last = series[series.length - 1].key
+              return (
+                <span className="text-fg">
+                  Originates <strong>{totalLoans}</strong> loans over <strong>{series.length}</strong> month
+                  {series.length === 1 ? '' : 's'} ({first} → {last}) ·
+                  total {formatCurrency(totalLoans * form.avg_loan_amount, false)}
+                </span>
+              )
+            })()}
           </div>
           <div className="col-span-2">
             <div className="text-[10px] text-fg-dim mb-1">Notes</div>
@@ -428,6 +551,69 @@ function EntryEditor({
             {busy ? 'Saving…' : form.id ? 'Save Changes' : 'Add Entry'}
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// Per-month count grid for 'schedule' mode. Renders months from startMonth
+// through endMonth (or 24 months if no end month set).
+function ScheduleGrid({
+  startMonth, endMonth, value, onChange,
+}: {
+  startMonth: string
+  endMonth: string | null
+  value: Record<string, number>
+  onChange: (v: Record<string, number>) => void
+}) {
+  if (!startMonth || !/^\d{4}-\d{2}$/.test(startMonth)) {
+    return (
+      <div className="text-[10px] text-fg-dim italic">
+        Set a valid Start Month to populate the per-month schedule.
+      </div>
+    )
+  }
+  let [y, m] = startMonth.split('-').map(Number)
+  const keys: string[] = []
+  for (let i = 0; i < 36; i++) {
+    const key = `${y}-${String(m).padStart(2, '0')}`
+    keys.push(key)
+    if (endMonth && key >= endMonth) break
+    if (!endMonth && i >= 23) break
+    m += 1
+    if (m > 12) { m = 1; y += 1 }
+  }
+  const total = keys.reduce((s, k) => s + (Number(value[k]) || 0), 0)
+  const set = (k: string, n: number) => {
+    const next = { ...value }
+    if (n > 0) next[k] = n
+    else delete next[k]
+    onChange(next)
+  }
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <div className="text-[10px] text-fg-dim">Per-month loan counts</div>
+        <div className="text-[10px] text-fg-dim">
+          Sum: <span className="text-fg font-mono">{total}</span>
+        </div>
+      </div>
+      <div className="grid grid-cols-4 gap-2 p-3 rounded border border-border-strong max-h-48 overflow-y-auto">
+        {keys.map(k => (
+          <label key={k} className="flex items-center gap-1.5">
+            <span className="text-[10px] font-mono text-fg-dim w-14 shrink-0">{k}</span>
+            <input
+              type="number"
+              min={0}
+              className="form-input text-right text-xs py-1 px-2"
+              value={value[k] ?? 0}
+              onChange={e => set(k, Math.max(0, parseInt(e.target.value) || 0))}
+            />
+          </label>
+        ))}
+      </div>
+      <div className="text-[10px] text-fg-dim mt-1 italic">
+        A Total Lots Cap still applies on top of this schedule (whichever stops first).
       </div>
     </div>
   )

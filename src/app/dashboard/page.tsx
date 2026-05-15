@@ -46,6 +46,10 @@ function applyFilter(months: MonthlyBalance[], active: Set<FilterKey>): MonthlyB
       finished_lots: active.has('finished_lots') ? m.finished_lots : 0,
       hhh:           active.has('hhh')           ? m.hhh           : 0,
       land_bucket:   active.has('land_bucket')   ? m.land_bucket   : 0,
+      // Forecasted (new-origination) portion follows its parent segment's
+      // chip so the split Forecasted rows zero out alongside SFR / MFR.
+      forecasted_sfr: active.has('sfr') ? m.forecasted_sfr : 0,
+      forecasted_mfr: active.has('mfr') ? m.forecasted_mfr : 0,
       total_loans: 0,
       total_all:   0,
       variance:    0,
@@ -177,19 +181,23 @@ export default function DashboardPage() {
           <div className="card-header"><span className="card-title">Current Breakdown</span></div>
           <div className="p-4 space-y-2">
             {[
-              { label: 'SFR',           value: current.sfr,            color: '#58A6FF' },
-              { label: 'MFR',           value: current.mfr,            color: '#D4A853' },
-              { label: 'A&D',           value: current.and,            color: '#3FB950' },
-              { label: 'Raw Land',      value: current.raw_land,       color: '#8B949E' },
-              { label: 'Finished Lots', value: current.finished_lots,  color: '#A371F7' },
-              { label: 'HHH/JV',        value: current.hhh,            color: '#F85149' },
-              { label: 'Land Bucket',   value: current.land_bucket,    color: '#79C0FF' },
-              { label: 'Fcst SFR',      value: current.forecasted_sfr, color: '#56D364' },
-              { label: 'Fcst MFR',      value: current.forecasted_mfr, color: '#56D364' },
+              // Base SFR / MFR are existing loans only; the forecasted
+              // portion is broken out into its own banded rows below so the
+              // slices don't overlap (Total still includes both).
+              { label: 'SFR',            value: current.sfr - current.forecasted_sfr, color: '#58A6FF' },
+              { label: 'MFR',            value: current.mfr - current.forecasted_mfr, color: '#D4A853' },
+              { label: 'A&D',            value: current.and,            color: '#3FB950' },
+              { label: 'Raw Land',       value: current.raw_land,       color: '#8B949E' },
+              { label: 'Finished Lots',  value: current.finished_lots,  color: '#A371F7' },
+              { label: 'HHH/JV',         value: current.hhh,            color: '#F85149' },
+              { label: 'Land Bucket',    value: current.land_bucket,    color: '#79C0FF' },
+              { label: 'Forecasted SFR', value: current.forecasted_sfr, color: '#8B949E', forecast: true },
+              { label: 'Forecasted MFR', value: current.forecasted_mfr, color: '#8B949E', forecast: true },
             ].filter(r => r.value > 0).map(row => {
               const pct = current.total_all > 0 ? row.value / current.total_all : 0
               return (
-                <div key={row.label}>
+                <div key={row.label}
+                     className={row.forecast ? 'bg-fg-dim/10 -mx-2 px-2 py-1.5 rounded-md' : ''}>
                   <div className="flex items-center justify-between text-xs mb-1">
                     <div className="flex items-center gap-1.5">
                       <div className="w-2 h-2 rounded-full" style={{ background: row.color }} />
@@ -238,18 +246,21 @@ interface SummaryRow {
   values: number[]
   // 'currency' = $ formatted; 'pct' = percentage; 'variance' = signed $, blank in column 0
   kind: 'currency' | 'pct' | 'variance'
-  emphasis?: 'total' | 'accent'  // total = bold/strong fg; accent = accent color
+  // total = bold/strong fg; accent = accent color; forecast = neutral band
+  emphasis?: 'total' | 'accent' | 'forecast'
 }
 
 function SummaryTable({ months }: { months: MonthlyBalance[] }) {
   const rows: SummaryRow[] = [
-    { label: 'SFR',           values: months.map(m => m.sfr),                     kind: 'currency' },
-    { label: 'MFR',           values: months.map(m => m.mfr),                     kind: 'currency' },
-    { label: 'A&D',           values: months.map(m => m.and),                     kind: 'currency' },
-    { label: 'Raw Land',      values: months.map(m => m.raw_land),                kind: 'currency' },
-    { label: 'Fin. Lots',     values: months.map(m => m.finished_lots),           kind: 'currency' },
-    { label: 'Land Bucket',   values: months.map(m => m.land_bucket),             kind: 'currency' },
-    { label: 'Total (All)',   values: months.map(m => m.total_all),               kind: 'currency', emphasis: 'total' },
+    { label: 'SFR',             values: months.map(m => m.sfr - m.forecasted_sfr), kind: 'currency' },
+    { label: 'MFR',             values: months.map(m => m.mfr - m.forecasted_mfr), kind: 'currency' },
+    { label: 'A&D',             values: months.map(m => m.and),                    kind: 'currency' },
+    { label: 'Raw Land',        values: months.map(m => m.raw_land),               kind: 'currency' },
+    { label: 'Fin. Lots',       values: months.map(m => m.finished_lots),          kind: 'currency' },
+    { label: 'Forecasted SFR',  values: months.map(m => m.forecasted_sfr),         kind: 'currency', emphasis: 'forecast' },
+    { label: 'Forecasted MFR',  values: months.map(m => m.forecasted_mfr),         kind: 'currency', emphasis: 'forecast' },
+    { label: 'Land Bucket',     values: months.map(m => m.land_bucket),            kind: 'currency' },
+    { label: 'Total (All)',     values: months.map(m => m.total_all),              kind: 'currency', emphasis: 'total' },
     { label: 'Variance',      values: months.map(m => m.variance),                kind: 'variance' },
     { label: 'Income',        values: months.map(m => m.total_income),            kind: 'currency', emphasis: 'accent' },
     { label: 'Ann. Yield',    values: months.map(m => m.annualized_yield_pct),    kind: 'pct' },
@@ -266,8 +277,9 @@ function SummaryTable({ months }: { months: MonthlyBalance[] }) {
   }
 
   const rowEmphasis = (row: SummaryRow) => {
-    if (row.emphasis === 'total')  return 'font-medium text-fg-strong bg-border/30'
-    if (row.emphasis === 'accent') return 'text-accent'
+    if (row.emphasis === 'total')    return 'font-medium text-fg-strong bg-border/30'
+    if (row.emphasis === 'accent')   return 'text-accent'
+    if (row.emphasis === 'forecast') return 'bg-fg-dim/10 text-fg'
     return ''
   }
 

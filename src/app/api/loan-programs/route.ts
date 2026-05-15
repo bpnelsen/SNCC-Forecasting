@@ -15,7 +15,7 @@ export async function GET() {
   }
 }
 
-export async function PUT(req: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
     const programs = await req.json() as Array<{
       id: string

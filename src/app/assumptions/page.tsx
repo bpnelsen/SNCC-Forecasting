@@ -41,13 +41,13 @@ export default function AssumptionsPage() {
       // Save sequentially so we know which endpoint failed and can surface its
       // real error. Promise.all would mask one failure with the other.
       const a = await fetch('/api/assumptions', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
       })
       if (!a.ok) throw new Error(await readError(a, 'Assumptions'))
 
       if (programs.length > 0) {
         const p = await fetch('/api/loan-programs', {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(programs),
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(programs),
         })
         if (!p.ok) throw new Error(await readError(p, 'Loan programs'))
       }
@@ -228,13 +228,14 @@ export default function AssumptionsPage() {
                               <div className="text-[10px] text-fg-dim mb-0.5 text-center">M{i + 1}</div>
                               <input
                                 type="number"
-                                step="0.01"
+                                step="1"
+                                min="0"
                                 className="form-input text-right text-xs"
-                                value={((p.draw_curve[i] ?? 0) * 100).toFixed(2)}
+                                value={Math.round((p.draw_curve[i] ?? 0) * 100)}
                                 onChange={e => {
-                                  const pct = parseFloat(e.target.value)
+                                  const pct = Math.round(Number(e.target.value))
                                   const next = Array.from({ length: count }, (_, j) => p.draw_curve[j] ?? 0)
-                                  next[i] = isNaN(pct) ? 0 : pct / 100
+                                  next[i] = !isFinite(pct) || pct < 0 ? 0 : pct / 100
                                   updateProgram(p.id, { draw_curve: next })
                                 }}
                               />
@@ -242,7 +243,7 @@ export default function AssumptionsPage() {
                           ))}
                         </div>
                         <div className="text-[10px] text-fg-dim mt-2">
-                          Months: {count} · sum: {sumPct.toFixed(1)}%
+                          Months: {count} · sum: {Math.round(sumPct)}%
                         </div>
                       </>
                     )

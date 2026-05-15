@@ -17,7 +17,7 @@ export async function GET() {
   }
 }
 
-export async function PUT(req: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const sb   = createServiceClient()

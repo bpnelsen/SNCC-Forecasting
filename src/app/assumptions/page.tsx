@@ -187,20 +187,66 @@ export default function AssumptionsPage() {
                   </div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-fg-dim mb-1">
-                    Draw curve (incremental monthly fractions, comma-separated; sum ≈ 1.0)
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="text-[10px] text-fg-dim">
+                      Draw curve — incremental % of max balance per month (sum ≈ 100%)
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        className="btn-ghost text-[10px] px-1.5 py-0.5"
+                        onClick={() => {
+                          const len = Math.max(24, p.draw_curve.length)
+                          updateProgram(p.id, {
+                            draw_curve: Array.from({ length: len + 1 }, (_, j) => p.draw_curve[j] ?? 0),
+                          })
+                        }}
+                      >+ Month</button>
+                      <button
+                        type="button"
+                        className="btn-ghost text-[10px] px-1.5 py-0.5 disabled:opacity-40"
+                        disabled={Math.max(24, p.draw_curve.length) <= 24}
+                        onClick={() => {
+                          const len = Math.max(24, p.draw_curve.length)
+                          if (len <= 24) return
+                          updateProgram(p.id, { draw_curve: p.draw_curve.slice(0, len - 1) })
+                        }}
+                      >− Month</button>
+                    </div>
                   </div>
-                  <input
-                    className="form-input text-xs font-mono"
-                    value={p.draw_curve.join(', ')}
-                    onChange={e => {
-                      const parts = e.target.value.split(',').map(s => Number(s.trim()))
-                      if (parts.every(n => !isNaN(n))) updateProgram(p.id, { draw_curve: parts })
-                    }}
-                  />
-                  <div className="text-[10px] text-fg-dim mt-1">
-                    Months: {p.draw_curve.length} · sum: {p.draw_curve.reduce((a, b) => a + b, 0).toFixed(3)}
-                  </div>
+                  {(() => {
+                    // Show at least 24 month inputs; never truncate a longer
+                    // curve (e.g. an 18- or 30-month program). The stored
+                    // curve is fractions; the grid edits percentages.
+                    const count = Math.max(24, p.draw_curve.length)
+                    const sumPct = p.draw_curve.reduce((a, b) => a + b, 0) * 100
+                    return (
+                      <>
+                        <div className="grid grid-cols-4 md:grid-cols-6 gap-2">
+                          {Array.from({ length: count }, (_, i) => (
+                            <div key={i}>
+                              <div className="text-[10px] text-fg-dim mb-0.5 text-center">M{i + 1}</div>
+                              <input
+                                type="number"
+                                step="0.01"
+                                className="form-input text-right text-xs"
+                                value={((p.draw_curve[i] ?? 0) * 100).toFixed(2)}
+                                onChange={e => {
+                                  const pct = parseFloat(e.target.value)
+                                  const next = Array.from({ length: count }, (_, j) => p.draw_curve[j] ?? 0)
+                                  next[i] = isNaN(pct) ? 0 : pct / 100
+                                  updateProgram(p.id, { draw_curve: next })
+                                }}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                        <div className="text-[10px] text-fg-dim mt-2">
+                          Months: {count} · sum: {sumPct.toFixed(1)}%
+                        </div>
+                      </>
+                    )
+                  })()}
                 </div>
               </div>
             ))}

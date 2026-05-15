@@ -48,6 +48,8 @@ export default function ForecastPage() {
             <thead>
               <tr>
                 <th>Month</th>
+                <th className="text-right">New Orig (#)</th>
+                <th className="text-right">New Orig $</th>
                 <th className="text-right">Fcst SFR</th>
                 <th className="text-right">Fcst MFR</th>
                 <th className="text-right">Total Fcst</th>
@@ -61,9 +63,11 @@ export default function ForecastPage() {
               {data.months.map(m => (
                 <tr key={m.month}>
                   <td className="text-fg font-medium">{m.label}</td>
+                  <td className="num">{m.new_originations_count || '—'}</td>
+                  <td className="num">{m.new_originations_amount ? formatCurrency(m.new_originations_amount, true) : '—'}</td>
                   <td className="num text-success-bright">{formatCurrency(m.forecasted_sfr, true)}</td>
                   <td className="num text-success-bright">{formatCurrency(m.forecasted_mfr, true)}</td>
-                  <td className="num font-medium">{formatCurrency(m.forecasted_sfr + m.forecasted_mfr, true)}</td>
+                  <td className="num font-medium">{formatCurrency(m.forecasted_total, true)}</td>
                   <td className="num">{formatCurrency(m.total_loans, true)}</td>
                   <td className="num font-medium text-accent">{formatCurrency(m.total_all, true)}</td>
                   <td className="num text-accent">{formatCurrency(m.total_income, true)}</td>

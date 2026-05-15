@@ -1,4 +1,4 @@
-import { addMonths, format, parseISO } from 'date-fns'
+import { addMonths, format, parseISO, startOfMonth, isBefore } from 'date-fns'
 import {
   Loan,
   LoanType,
@@ -231,7 +231,14 @@ export interface ForecastInput {
 }
 
 export function runForecast(input: ForecastInput): ForecastResult {
-  const startDate = parseISO(input.settings.start_date)
+  // forecast_settings.start_date is frozen at the row's insert time (migration
+  // default date_trunc('month', current_date)). For a forward-looking tool the
+  // horizon must start no earlier than the current month, otherwise the whole
+  // forecast — and the in-window check for scheduled new originations — is
+  // anchored to a stale month and upcoming entries fall off the end.
+  const storedStart = parseISO(input.settings.start_date)
+  const thisMonth = startOfMonth(new Date())
+  const startDate = isBefore(storedStart, thisMonth) ? thisMonth : storedStart
   const months = generateMonths(startDate, input.settings.horizon_months)
 
   const buildersById = new Map(input.builders.map(b => [b.id, b]))
@@ -245,6 +252,15 @@ export function runForecast(input: ForecastInput): ForecastResult {
   // month with loan_count loans of avg_loan_amount each. Program resolution
   // order: explicit loan_program_id on the row → builder.default_loan_program_id.
   // If neither resolves we skip the row (no curve to draw against).
+  // Fallback program used when an entry has no explicit program and the builder
+  // has no default (e.g. builders added via the quick inline adder). Prefer an
+  // SF construction program — vertical starts are overwhelmingly SF — then any
+  // program at all. Only when zero programs exist do we have nothing to draw.
+  const fallbackProgram =
+    input.loanPrograms.find(p => p.product_type === 'SF') ??
+    input.loanPrograms[0] ??
+    null
+
   const scheduledOriginations: LotOrigination[] = []
   for (const entry of input.newOriginations) {
     if (entry.loan_count <= 0 || entry.avg_loan_amount <= 0) continue
@@ -253,9 +269,8 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const programId = entry.loan_program_id
       ?? buildersById.get(entry.builder_id)?.default_loan_program_id
       ?? null
-    if (!programId) continue
-    const program = programsById.get(programId)
-    if (!program) continue
+    const program = (programId ? programsById.get(programId) : undefined) ?? fallbackProgram
+    if (!program) continue  // no loan programs configured at all
     scheduledOriginations.push({
       origination_month_idx: idx,
       count: entry.loan_count,
@@ -265,6 +280,17 @@ export function runForecast(input: ForecastInput): ForecastResult {
     })
   }
   const allOriginations: LotOrigination[] = [...lb.lotOriginations, ...scheduledOriginations]
+
+  // Count / dollar amount of scheduled new originations *at their origination
+  // month* so the Forecast page can show what was actually scheduled (the
+  // land-bucket counts in lb.totals only cover lot-driven verticals).
+  const scheduledByMonthIdx = new Map<number, { count: number; amount: number }>()
+  for (const o of scheduledOriginations) {
+    const agg = scheduledByMonthIdx.get(o.origination_month_idx) ?? { count: 0, amount: 0 }
+    agg.count += o.count
+    agg.amount += o.count * o.max_amount_per_loan
+    scheduledByMonthIdx.set(o.origination_month_idx, agg)
+  }
 
   const loansByType: Record<LoanType, Loan[]> = {
     SFR: [],
@@ -375,6 +401,9 @@ export function runForecast(input: ForecastInput): ForecastResult {
       new_originations_mfr: newBySegment.mfr,
       forecasted_sfr: newBySegment.sfr,
       forecasted_mfr: newBySegment.mfr,
+      forecasted_total:
+        newBySegment.sfr + newBySegment.mfr + newBySegment.and +
+        newBySegment.raw_land + newBySegment.finished_lots + newBySegment.hhh,
       yield_active,
       yield_projected,
       yield_land_bucket,
@@ -383,8 +412,10 @@ export function runForecast(input: ForecastInput): ForecastResult {
       annualized_yield_pct,
       lots_sold: lb.totals[i].lots_sold,
       lot_sale_proceeds: lb.totals[i].sale_proceeds,
-      new_originations_count: lb.totals[i].new_vertical_origs_count,
-      new_originations_amount: lb.totals[i].new_vertical_origs_amount,
+      new_originations_count:
+        lb.totals[i].new_vertical_origs_count + (scheduledByMonthIdx.get(i)?.count ?? 0),
+      new_originations_amount:
+        lb.totals[i].new_vertical_origs_amount + (scheduledByMonthIdx.get(i)?.amount ?? 0),
       payoffs_count,
       payoffs_amount,
       cash_flow,

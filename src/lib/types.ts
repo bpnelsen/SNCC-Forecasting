@@ -189,8 +189,27 @@ export interface LandBucketProject {
   notes: string | null
 }
 
-export interface NewOriginationEntry {
+// HHH / JV development project. Mirrors the meaningful Land Bucket fields but
+// is a distinct entity (not a loan, not a land bucket project). Its
+// balance_outstanding feeds the HHH/JV forecast segment.
+export interface HHHJVProject {
   id: string
+  name: string
+  builder_id: string | null
+  total_lots: number
+  lot_price: number
+  absorption_rate: number | null
+  balance_outstanding: number
+  interest_rate: number
+  dev_start_date: string | null
+  dev_end_date: string | null
+  lot_sales_start_date: string | null
+  vertical_loan_program_id: string | null
+  vertical_loan_amount: number | null
+  notes: string | null
+}
+
+export interface NewOriginationEntry {  id: string
   builder_id: string
   land_bucket_project_id: string | null
   // Free-text development name. When the user picks an existing project from

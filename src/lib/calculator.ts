@@ -12,6 +12,7 @@ import {
   MonthlyBalance,
   ForecastResult,
   NewOriginationEntry,
+  HHHJVProject,
 } from './types'
 
 // Vertical loan amount = lot_price × this multiple. Quick default until the
@@ -220,6 +221,18 @@ function projectExistingLoanOutstanding(loan: Loan, monthDate: Date): number {
   return loan.loan_amount_disbursed > 0 ? loan.loan_amount_disbursed : 0
 }
 
+// HHH/JV project contribution for a given forecast month key ('YYYY-MM').
+// balance_outstanding applies from dev_start_date's month (inclusive, or
+// immediately if null) until dev_end_date's month (exclusive, or the whole
+// horizon if null). YYYY-MM string compare is chronological.
+function hhhJvBalanceForMonth(p: HHHJVProject, monthKey: string): number {
+  const startKey = p.dev_start_date ? p.dev_start_date.slice(0, 7) : null
+  const endKey   = p.dev_end_date ? p.dev_end_date.slice(0, 7) : null
+  if (startKey && monthKey < startKey) return 0
+  if (endKey && monthKey >= endKey) return 0
+  return p.balance_outstanding > 0 ? p.balance_outstanding : 0
+}
+
 // Lot-driven origination cohort balance at month index `m`.
 function lotOriginationBalance(orig: LotOrigination, m: number): number {
   const age = m - orig.origination_month_idx
@@ -236,6 +249,7 @@ export interface ForecastInput {
   builders: Builder[]
   loanPrograms: LoanProgram[]
   newOriginations: NewOriginationEntry[]
+  hhhJvProjects: HHHJVProject[]
   settings: ForecastSettings
   versionLabel: string
   asOfDate: string
@@ -369,7 +383,10 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const and = and_existing + newBySegment.and
     const raw_land = raw_existing + newBySegment.raw_land
     const finished_lots = fl_existing + newBySegment.finished_lots
-    const hhh = hhh_existing + newBySegment.hhh
+    // HHH/JV projects feed the HHH/JV segment (balance == outstanding).
+    const hhhJv = input.hhhJvProjects.reduce(
+      (s, p) => s + hhhJvBalanceForMonth(p, m.key), 0)
+    const hhh = hhh_existing + newBySegment.hhh + hhhJv
 
     // Outstanding (drawn) per segment: existing loans valued at disbursed
     // (decays at maturity) + forecasted cohorts (already a drawn balance).
@@ -381,7 +398,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const outstanding_raw_land      = sumExistingOut(loansByType.RAW_LAND)      + newBySegment.raw_land
     const outstanding_finished_lots = sumExistingOut(loansByType.FINISHED_LOTS) + newBySegment.finished_lots
     const outstanding_hhh           = sumExistingOut(loansByType.HHH) +
-                                      sumExistingOut(loansByType.UNKNOWN) + newBySegment.hhh
+                                      sumExistingOut(loansByType.UNKNOWN) + newBySegment.hhh + hhhJv
 
     const land_bucket = lb.totals[i].ending_balance
     const total_loans = sfr + mfr + and + raw_land + finished_lots + hhh

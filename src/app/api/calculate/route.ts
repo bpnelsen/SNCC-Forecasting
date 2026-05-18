@@ -8,6 +8,7 @@ import {
   LandBucketProject,
   ForecastSettings,
   NewOriginationEntry,
+  HHHJVProject,
 } from '@/lib/types'
 
 export async function GET() {
@@ -68,12 +69,13 @@ export async function GET() {
       }, { status: 500 })
     }
 
-    const [loansRes, buildersRes, programsRes, projectsRes, origsRes] = await Promise.all([
+    const [loansRes, buildersRes, programsRes, projectsRes, origsRes, hhhJvRes] = await Promise.all([
       sb.from('loans').select('*').eq('version_id', version.id),
       sb.from('builders').select('*'),
       sb.from('loan_programs').select('*'),
       sb.from('land_bucket_projects').select('*'),
       sb.from('new_origination_schedule').select('*'),
+      sb.from('hhh_jv_projects').select('*'),
     ])
 
     if (loansRes.error)    throw loansRes.error
@@ -85,6 +87,10 @@ export async function GET() {
     const newOriginations: NewOriginationEntry[] = origsRes.error
       ? []
       : ((origsRes.data ?? []) as NewOriginationEntry[])
+    // Same graceful fallback if hhh_jv_projects (migration 008) isn't applied.
+    const hhhJvProjects: HHHJVProject[] = hhhJvRes.error
+      ? []
+      : ((hhhJvRes.data ?? []) as HHHJVProject[])
 
     const result = runForecast({
       loans:               (loansRes.data    ?? []) as Loan[],
@@ -92,6 +98,7 @@ export async function GET() {
       loanPrograms:        (programsRes.data ?? []) as LoanProgram[],
       landBucketProjects:  (projectsRes.data ?? []) as LandBucketProject[],
       newOriginations,
+      hhhJvProjects,
       settings:            settings as ForecastSettings,
       versionLabel:        version.label,
       asOfDate:            version.as_of_date || new Date().toISOString().split('T')[0],

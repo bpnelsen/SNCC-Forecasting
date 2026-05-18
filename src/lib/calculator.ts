@@ -209,6 +209,17 @@ function projectExistingLoanBalance(
   return maxAmount > 0 ? maxAmount : 0
 }
 
+// Outstanding (cash actually drawn) for an existing loan. Same maturity gate
+// as projectExistingLoanBalance, but valued at loan_amount_disbursed instead
+// of the committed/face amount — held flat until the loan matures, then 0.
+function projectExistingLoanOutstanding(loan: Loan, monthDate: Date): number {
+  if (loan.current_loan_due_date) {
+    const dueDate = parseISO(loan.current_loan_due_date)
+    if (monthDate >= dueDate) return 0
+  }
+  return loan.loan_amount_disbursed > 0 ? loan.loan_amount_disbursed : 0
+}
+
 // Lot-driven origination cohort balance at month index `m`.
 function lotOriginationBalance(orig: LotOrigination, m: number): number {
   const age = m - orig.origination_month_idx
@@ -360,6 +371,18 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const finished_lots = fl_existing + newBySegment.finished_lots
     const hhh = hhh_existing + newBySegment.hhh
 
+    // Outstanding (drawn) per segment: existing loans valued at disbursed
+    // (decays at maturity) + forecasted cohorts (already a drawn balance).
+    const sumExistingOut = (loans: Loan[]) =>
+      loans.reduce((s, l) => s + projectExistingLoanOutstanding(l, m.date), 0)
+    const outstanding_sfr           = sumExistingOut(loansByType.SFR)           + newBySegment.sfr
+    const outstanding_mfr           = sumExistingOut(loansByType.MFR)           + newBySegment.mfr
+    const outstanding_and           = sumExistingOut(loansByType['A&D'])        + newBySegment.and
+    const outstanding_raw_land      = sumExistingOut(loansByType.RAW_LAND)      + newBySegment.raw_land
+    const outstanding_finished_lots = sumExistingOut(loansByType.FINISHED_LOTS) + newBySegment.finished_lots
+    const outstanding_hhh           = sumExistingOut(loansByType.HHH) +
+                                      sumExistingOut(loansByType.UNKNOWN) + newBySegment.hhh
+
     const land_bucket = lb.totals[i].ending_balance
     const total_loans = sfr + mfr + and + raw_land + finished_lots + hhh
     const total_all = total_loans + land_bucket
@@ -419,6 +442,12 @@ export function runForecast(input: ForecastInput): ForecastResult {
       land_bucket,
       total_loans,
       total_all,
+      outstanding_sfr,
+      outstanding_mfr,
+      outstanding_and,
+      outstanding_raw_land,
+      outstanding_finished_lots,
+      outstanding_hhh,
       variance,
       new_originations_sfr: newBySegment.sfr,
       new_originations_mfr: newBySegment.mfr,

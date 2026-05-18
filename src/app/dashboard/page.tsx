@@ -50,6 +50,13 @@ function applyFilter(months: MonthlyBalance[], active: Set<FilterKey>): MonthlyB
       // chip so the split Forecasted rows zero out alongside SFR / MFR.
       forecasted_sfr: active.has('sfr') ? m.forecasted_sfr : 0,
       forecasted_mfr: active.has('mfr') ? m.forecasted_mfr : 0,
+      // Outstanding (drawn) per segment follows the same product-type chips.
+      outstanding_sfr:           active.has('sfr')           ? m.outstanding_sfr           : 0,
+      outstanding_mfr:           active.has('mfr')           ? m.outstanding_mfr           : 0,
+      outstanding_and:           active.has('and')           ? m.outstanding_and           : 0,
+      outstanding_raw_land:      active.has('raw_land')      ? m.outstanding_raw_land      : 0,
+      outstanding_finished_lots: active.has('finished_lots') ? m.outstanding_finished_lots : 0,
+      outstanding_hhh:           active.has('hhh')           ? m.outstanding_hhh           : 0,
       total_loans: 0,
       total_all:   0,
       variance:    0,
@@ -259,6 +266,12 @@ interface SummaryRow {
 }
 
 function SummaryTable({ months }: { months: MonthlyBalance[] }) {
+  // Drawn/outstanding total for the loan book (existing disbursed +
+  // forecasted cohorts), excluding Land Bucket; "All" adds Land Bucket.
+  const outLoans = (m: MonthlyBalance) =>
+    m.outstanding_sfr + m.outstanding_mfr + m.outstanding_and +
+    m.outstanding_raw_land + m.outstanding_finished_lots + m.outstanding_hhh
+
   const rows: SummaryRow[] = [
     { label: 'SFR',             values: months.map(m => m.sfr - m.forecasted_sfr), kind: 'currency' },
     { label: 'MFR',             values: months.map(m => m.mfr - m.forecasted_mfr), kind: 'currency' },
@@ -268,6 +281,8 @@ function SummaryTable({ months }: { months: MonthlyBalance[] }) {
     { label: 'Forecasted SFR',  values: months.map(m => m.forecasted_sfr),         kind: 'currency', emphasis: 'forecast' },
     { label: 'Forecasted MFR',  values: months.map(m => m.forecasted_mfr),         kind: 'currency', emphasis: 'forecast' },
     { label: 'Land Bucket',     values: months.map(m => m.land_bucket),            kind: 'currency' },
+    { label: 'Total Outstanding (Loans)', values: months.map(outLoans),                       kind: 'currency', emphasis: 'total' },
+    { label: 'Total Outstanding (All)',   values: months.map(m => outLoans(m) + m.land_bucket), kind: 'currency', emphasis: 'total' },
     { label: 'Total (All)',     values: months.map(m => m.total_all),              kind: 'currency', emphasis: 'total' },
     { label: 'Variance',      values: months.map(m => m.variance),                kind: 'variance' },
     { label: 'Income',        values: months.map(m => m.total_income),            kind: 'currency', emphasis: 'accent' },

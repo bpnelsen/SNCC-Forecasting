@@ -84,6 +84,14 @@ export interface MonthlyBalance {
   land_bucket: number
   total_loans: number
   total_all: number
+  // Drawn/outstanding balance per segment: existing loans valued at
+  // loan_amount_disbursed (decays at maturity) + forecasted cohorts.
+  outstanding_sfr: number
+  outstanding_mfr: number
+  outstanding_and: number
+  outstanding_raw_land: number
+  outstanding_finished_lots: number
+  outstanding_hhh: number
   variance: number
   new_originations_sfr: number
   new_originations_mfr: number

@@ -96,6 +96,11 @@ export default function DashboardPage() {
   const peak    = months.reduce((a, b) => b.total_all > a.total_all ? b : a, months[0])
   const filtered = active.size < CHIPS.length
 
+  // Outstanding (disbursed) respects the product-type chips. Land Bucket
+  // isn't a loan type so it never contributes here.
+  const outstanding = (['sfr', 'mfr', 'and', 'raw_land', 'finished_lots', 'hhh'] as const)
+    .reduce((s, k) => active.has(k) ? s + data.active_loans_outstanding[k] : s, 0)
+
   const toggle = (key: FilterKey) => {
     const next = new Set(active)
     if (next.has(key)) next.delete(key)
@@ -159,8 +164,8 @@ export default function DashboardPage() {
         <StatCard label="Active Loans" value={formatCurrency(current.total_loans, true)}
           subLabel={`${data.total_active_loans} loans`} />
         <StatCard label="Active Loan (Outstanding)"
-          value={formatCurrency(data.active_loans_outstanding, true)}
-          subLabel="disbursed to date" />
+          value={formatCurrency(outstanding, true)}
+          subLabel={filtered ? 'disbursed · filtered' : 'disbursed to date'} />
         <StatCard label="Land Bucket" value={formatCurrency(current.land_bucket, true)}
           delta={formatVariance(current.land_bucket - (months[1]?.land_bucket || 0))} />
         <StatCard label="Monthly Income" value={formatCurrency(current.total_income, true)}

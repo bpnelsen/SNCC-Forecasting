@@ -323,6 +323,9 @@ export function runForecast(input: ForecastInput): ForecastResult {
   }
   for (const l of input.loans) loansByType[l.loan_type].push(l)
 
+  const sumDisbursed = (loans: Loan[]) =>
+    loans.reduce((s, l) => s + (l.loan_amount_disbursed || 0), 0)
+
   const monthly: MonthlyBalance[] = []
   let prevTotalAll = 0
   const prevExistingBalances = new Map<string, number>()
@@ -448,7 +451,15 @@ export function runForecast(input: ForecastInput): ForecastResult {
     as_of_date: input.asOfDate,
     version_label: input.versionLabel,
     total_active_loans: input.loans.length,
-    active_loans_outstanding: input.loans.reduce((s, l) => s + (l.loan_amount_disbursed || 0), 0),
+    active_loans_outstanding: {
+      sfr:           sumDisbursed(loansByType.SFR),
+      mfr:           sumDisbursed(loansByType.MFR),
+      and:           sumDisbursed(loansByType['A&D']),
+      raw_land:      sumDisbursed(loansByType.RAW_LAND),
+      finished_lots: sumDisbursed(loansByType.FINISHED_LOTS),
+      hhh:           sumDisbursed(loansByType.HHH) + sumDisbursed(loansByType.UNKNOWN),
+      total:         input.loans.reduce((s, l) => s + (l.loan_amount_disbursed || 0), 0),
+    },
     current_balances: {
       sfr: m0.sfr,
       mfr: m0.mfr,

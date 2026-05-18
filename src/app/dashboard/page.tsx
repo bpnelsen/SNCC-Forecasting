@@ -152,12 +152,15 @@ export default function DashboardPage() {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 fade-up fade-up-2">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 fade-up fade-up-2">
         <StatCard label={filtered ? 'Total Portfolio (filtered)' : 'Total Portfolio (All)'}
           value={formatCurrency(current.total_all, true)}
           delta={`Peak: ${formatCurrency(peak.total_all, true)} (${peak.label})`} accent />
         <StatCard label="Active Loans" value={formatCurrency(current.total_loans, true)}
           subLabel={`${data.total_active_loans} loans`} />
+        <StatCard label="Active Loan (Outstanding)"
+          value={formatCurrency(data.active_loans_outstanding, true)}
+          subLabel="disbursed to date" />
         <StatCard label="Land Bucket" value={formatCurrency(current.land_bucket, true)}
           delta={formatVariance(current.land_bucket - (months[1]?.land_bucket || 0))} />
         <StatCard label="Monthly Income" value={formatCurrency(current.total_income, true)}

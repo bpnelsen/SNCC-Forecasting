@@ -113,6 +113,9 @@ export interface ForecastResult {
   as_of_date: string
   version_label: string
   total_active_loans: number
+  // Sum of loan_amount_disbursed across every loan in the active version
+  // (cash actually drawn/funded), independent of the projected balance.
+  active_loans_outstanding: number
   current_balances: {
     sfr: number
     mfr: number

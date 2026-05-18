@@ -448,6 +448,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     as_of_date: input.asOfDate,
     version_label: input.versionLabel,
     total_active_loans: input.loans.length,
+    active_loans_outstanding: input.loans.reduce((s, l) => s + (l.loan_amount_disbursed || 0), 0),
     current_balances: {
       sfr: m0.sfr,
       mfr: m0.mfr,

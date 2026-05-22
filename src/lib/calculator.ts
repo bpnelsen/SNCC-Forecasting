@@ -376,7 +376,22 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const newBySegment: Record<Segment, number> = {
       sfr: 0, mfr: 0, raw_land: 0, and: 0, finished_lots: 0, hhh: 0,
     }
+    // Per-segment new-origination count + amount AT origination month — feeds
+    // the forecast page's product-type chip filter.
+    const newOrigsBySeg: Record<Segment, { count: number; amount: number }> = {
+      sfr:           { count: 0, amount: 0 },
+      mfr:           { count: 0, amount: 0 },
+      and:           { count: 0, amount: 0 },
+      raw_land:      { count: 0, amount: 0 },
+      finished_lots: { count: 0, amount: 0 },
+      hhh:           { count: 0, amount: 0 },
+    }
     for (const orig of allOriginations) {
+      if (orig.origination_month_idx === i) {
+        const seg = PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]
+        newOrigsBySeg[seg].count  += orig.count
+        newOrigsBySeg[seg].amount += orig.count * orig.max_amount_per_loan
+      }
       const bal = lotOriginationBalance(orig, i)
       if (bal === 0) continue
       newBySegment[PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]] += bal
@@ -475,6 +490,11 @@ export function runForecast(input: ForecastInput): ForecastResult {
       new_originations_mfr: newBySegment.mfr,
       forecasted_sfr: newBySegment.sfr,
       forecasted_mfr: newBySegment.mfr,
+      forecasted_and: newBySegment.and,
+      forecasted_raw_land: newBySegment.raw_land,
+      forecasted_finished_lots: newBySegment.finished_lots,
+      forecasted_hhh: newBySegment.hhh,
+      new_origs_by_segment: newOrigsBySeg,
       forecasted_total:
         newBySegment.sfr + newBySegment.mfr + newBySegment.and +
         newBySegment.raw_land + newBySegment.finished_lots + newBySegment.hhh,

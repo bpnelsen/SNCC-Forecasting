@@ -97,9 +97,27 @@ export interface MonthlyBalance {
   new_originations_mfr: number
   forecasted_sfr: number
   forecasted_mfr: number
+  // Forecasted (drawn) balance contributed by new-origination cohorts in the
+  // remaining product segments — added so the forecast page can filter by
+  // product type, not just SF + MF.
+  forecasted_and: number
+  forecasted_raw_land: number
+  forecasted_finished_lots: number
+  forecasted_hhh: number
   // Outstanding balance contributed by ALL forecasted new-origination cohorts
   // (every product type), not just SF + MF.
   forecasted_total: number
+  // Per-segment new-origination count and dollar amount AT origination month
+  // (LB-driven + scheduled). Lets the forecast page filter the New Orig (#) /
+  // New Orig $ columns by product type.
+  new_origs_by_segment: {
+    sfr: { count: number; amount: number }
+    mfr: { count: number; amount: number }
+    and: { count: number; amount: number }
+    raw_land: { count: number; amount: number }
+    finished_lots: { count: number; amount: number }
+    hhh: { count: number; amount: number }
+  }
   yield_active: number
   yield_projected: number
   yield_land_bucket: number

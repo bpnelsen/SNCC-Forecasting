@@ -11,6 +11,10 @@ import {
   HHHJVProject,
 } from '@/lib/types'
 
+// Next 14 statically caches GET route handlers by default. Force-dynamic so
+// the forecast always reflects the current active version, originations, etc.
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   try {
     const sb = createServiceClient()

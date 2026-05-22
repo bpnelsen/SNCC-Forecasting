@@ -46,6 +46,17 @@ function applyFilter(months: MonthlyBalance[], active: Set<FilterKey>): MonthlyB
       finished_lots: active.has('finished_lots') ? m.finished_lots : 0,
       hhh:           active.has('hhh')           ? m.hhh           : 0,
       land_bucket:   active.has('land_bucket')   ? m.land_bucket   : 0,
+      // Forecasted (new-origination) portion follows its parent segment's
+      // chip so the split Forecasted rows zero out alongside SFR / MFR.
+      forecasted_sfr: active.has('sfr') ? m.forecasted_sfr : 0,
+      forecasted_mfr: active.has('mfr') ? m.forecasted_mfr : 0,
+      // Outstanding (drawn) per segment follows the same product-type chips.
+      outstanding_sfr:           active.has('sfr')           ? m.outstanding_sfr           : 0,
+      outstanding_mfr:           active.has('mfr')           ? m.outstanding_mfr           : 0,
+      outstanding_and:           active.has('and')           ? m.outstanding_and           : 0,
+      outstanding_raw_land:      active.has('raw_land')      ? m.outstanding_raw_land      : 0,
+      outstanding_finished_lots: active.has('finished_lots') ? m.outstanding_finished_lots : 0,
+      outstanding_hhh:           active.has('hhh')           ? m.outstanding_hhh           : 0,
       total_loans: 0,
       total_all:   0,
       variance:    0,
@@ -91,6 +102,11 @@ export default function DashboardPage() {
   const current = months[0]
   const peak    = months.reduce((a, b) => b.total_all > a.total_all ? b : a, months[0])
   const filtered = active.size < CHIPS.length
+
+  // Outstanding (disbursed) respects the product-type chips. Land Bucket
+  // isn't a loan type so it never contributes here.
+  const outstanding = (['sfr', 'mfr', 'and', 'raw_land', 'finished_lots', 'hhh'] as const)
+    .reduce((s, k) => active.has(k) ? s + data.active_loans_outstanding[k] : s, 0)
 
   const toggle = (key: FilterKey) => {
     const next = new Set(active)
@@ -148,12 +164,15 @@ export default function DashboardPage() {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 fade-up fade-up-2">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 fade-up fade-up-2">
         <StatCard label={filtered ? 'Total Portfolio (filtered)' : 'Total Portfolio (All)'}
           value={formatCurrency(current.total_all, true)}
           delta={`Peak: ${formatCurrency(peak.total_all, true)} (${peak.label})`} accent />
         <StatCard label="Active Loans" value={formatCurrency(current.total_loans, true)}
           subLabel={`${data.total_active_loans} loans`} />
+        <StatCard label="Active Loan (Outstanding)"
+          value={formatCurrency(outstanding, true)}
+          subLabel={filtered ? 'disbursed · filtered' : 'disbursed to date'} />
         <StatCard label="Land Bucket" value={formatCurrency(current.land_bucket, true)}
           delta={formatVariance(current.land_bucket - (months[1]?.land_bucket || 0))} />
         <StatCard label="Monthly Income" value={formatCurrency(current.total_income, true)}
@@ -177,19 +196,23 @@ export default function DashboardPage() {
           <div className="card-header"><span className="card-title">Current Breakdown</span></div>
           <div className="p-4 space-y-2">
             {[
-              { label: 'SFR',           value: current.sfr,            color: '#58A6FF' },
-              { label: 'MFR',           value: current.mfr,            color: '#D4A853' },
-              { label: 'A&D',           value: current.and,            color: '#3FB950' },
-              { label: 'Raw Land',      value: current.raw_land,       color: '#8B949E' },
-              { label: 'Finished Lots', value: current.finished_lots,  color: '#A371F7' },
-              { label: 'HHH/JV',        value: current.hhh,            color: '#F85149' },
-              { label: 'Land Bucket',   value: current.land_bucket,    color: '#79C0FF' },
-              { label: 'Fcst SFR',      value: current.forecasted_sfr, color: '#56D364' },
-              { label: 'Fcst MFR',      value: current.forecasted_mfr, color: '#56D364' },
+              // Base SFR / MFR are existing loans only; the forecasted
+              // portion is broken out into its own banded rows below so the
+              // slices don't overlap (Total still includes both).
+              { label: 'SFR',            value: current.sfr - current.forecasted_sfr, color: '#58A6FF' },
+              { label: 'MFR',            value: current.mfr - current.forecasted_mfr, color: '#D4A853' },
+              { label: 'A&D',            value: current.and,            color: '#3FB950' },
+              { label: 'Raw Land',       value: current.raw_land,       color: '#8B949E' },
+              { label: 'Finished Lots',  value: current.finished_lots,  color: '#A371F7' },
+              { label: 'HHH/JV',         value: current.hhh,            color: '#F85149' },
+              { label: 'Land Bucket',    value: current.land_bucket,    color: '#79C0FF' },
+              { label: 'Forecasted SFR', value: current.forecasted_sfr, color: '#8B949E', forecast: true },
+              { label: 'Forecasted MFR', value: current.forecasted_mfr, color: '#8B949E', forecast: true },
             ].filter(r => r.value > 0).map(row => {
               const pct = current.total_all > 0 ? row.value / current.total_all : 0
               return (
-                <div key={row.label}>
+                <div key={row.label}
+                     className={row.forecast ? 'bg-fg-dim/10 -mx-2 px-2 py-1.5 rounded-md' : ''}>
                   <div className="flex items-center justify-between text-xs mb-1">
                     <div className="flex items-center gap-1.5">
                       <div className="w-2 h-2 rounded-full" style={{ background: row.color }} />
@@ -238,18 +261,29 @@ interface SummaryRow {
   values: number[]
   // 'currency' = $ formatted; 'pct' = percentage; 'variance' = signed $, blank in column 0
   kind: 'currency' | 'pct' | 'variance'
-  emphasis?: 'total' | 'accent'  // total = bold/strong fg; accent = accent color
+  // total = bold/strong fg; accent = accent color; forecast = neutral band
+  emphasis?: 'total' | 'accent' | 'forecast'
 }
 
 function SummaryTable({ months }: { months: MonthlyBalance[] }) {
+  // Drawn/outstanding total for the loan book (existing disbursed +
+  // forecasted cohorts), excluding Land Bucket; "All" adds Land Bucket.
+  const outLoans = (m: MonthlyBalance) =>
+    m.outstanding_sfr + m.outstanding_mfr + m.outstanding_and +
+    m.outstanding_raw_land + m.outstanding_finished_lots + m.outstanding_hhh
+
   const rows: SummaryRow[] = [
-    { label: 'SFR',           values: months.map(m => m.sfr),                     kind: 'currency' },
-    { label: 'MFR',           values: months.map(m => m.mfr),                     kind: 'currency' },
-    { label: 'A&D',           values: months.map(m => m.and),                     kind: 'currency' },
-    { label: 'Raw Land',      values: months.map(m => m.raw_land),                kind: 'currency' },
-    { label: 'Fin. Lots',     values: months.map(m => m.finished_lots),           kind: 'currency' },
-    { label: 'Land Bucket',   values: months.map(m => m.land_bucket),             kind: 'currency' },
-    { label: 'Total (All)',   values: months.map(m => m.total_all),               kind: 'currency', emphasis: 'total' },
+    { label: 'SFR',             values: months.map(m => m.sfr - m.forecasted_sfr), kind: 'currency' },
+    { label: 'MFR',             values: months.map(m => m.mfr - m.forecasted_mfr), kind: 'currency' },
+    { label: 'A&D',             values: months.map(m => m.and),                    kind: 'currency' },
+    { label: 'Raw Land',        values: months.map(m => m.raw_land),               kind: 'currency' },
+    { label: 'Fin. Lots',       values: months.map(m => m.finished_lots),          kind: 'currency' },
+    { label: 'Forecasted SFR',  values: months.map(m => m.forecasted_sfr),         kind: 'currency', emphasis: 'forecast' },
+    { label: 'Forecasted MFR',  values: months.map(m => m.forecasted_mfr),         kind: 'currency', emphasis: 'forecast' },
+    { label: 'Land Bucket',     values: months.map(m => m.land_bucket),            kind: 'currency' },
+    { label: 'Total Outstanding (Loans)', values: months.map(outLoans),                       kind: 'currency', emphasis: 'total' },
+    { label: 'Total Outstanding (All)',   values: months.map(m => outLoans(m) + m.land_bucket), kind: 'currency', emphasis: 'total' },
+    { label: 'Total (All)',     values: months.map(m => m.total_all),              kind: 'currency', emphasis: 'total' },
     { label: 'Variance',      values: months.map(m => m.variance),                kind: 'variance' },
     { label: 'Income',        values: months.map(m => m.total_income),            kind: 'currency', emphasis: 'accent' },
     { label: 'Ann. Yield',    values: months.map(m => m.annualized_yield_pct),    kind: 'pct' },
@@ -266,8 +300,9 @@ function SummaryTable({ months }: { months: MonthlyBalance[] }) {
   }
 
   const rowEmphasis = (row: SummaryRow) => {
-    if (row.emphasis === 'total')  return 'font-medium text-fg-strong bg-border/30'
-    if (row.emphasis === 'accent') return 'text-accent'
+    if (row.emphasis === 'total')    return 'font-medium text-fg-strong bg-border/30'
+    if (row.emphasis === 'accent')   return 'text-accent'
+    if (row.emphasis === 'forecast') return 'bg-fg-dim/10 text-fg'
     return ''
   }
 

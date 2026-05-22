@@ -14,6 +14,8 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     if (body.loan_count !== undefined)             payload.loan_count = Number(body.loan_count) || 0
     if (body.avg_loan_amount !== undefined)        payload.avg_loan_amount = Number(body.avg_loan_amount) || 0
     if (body.loan_program_id !== undefined)        payload.loan_program_id = body.loan_program_id || null
+    if (body.interest_rate !== undefined)
+      payload.interest_rate = body.interest_rate === '' || body.interest_rate == null ? null : Number(body.interest_rate)
     if (body.total_lots !== undefined)
       payload.total_lots = body.total_lots === '' || body.total_lots == null ? null : Number(body.total_lots)
     if (body.end_month !== undefined)

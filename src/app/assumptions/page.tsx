@@ -41,13 +41,13 @@ export default function AssumptionsPage() {
       // Save sequentially so we know which endpoint failed and can surface its
       // real error. Promise.all would mask one failure with the other.
       const a = await fetch('/api/assumptions', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
       })
       if (!a.ok) throw new Error(await readError(a, 'Assumptions'))
 
       if (programs.length > 0) {
         const p = await fetch('/api/loan-programs', {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(programs),
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(programs),
         })
         if (!p.ok) throw new Error(await readError(p, 'Loan programs'))
       }
@@ -112,29 +112,6 @@ export default function AssumptionsPage() {
         </div>
       )}
 
-      {/* Draw Percentages */}
-      <Section title="Draw Percentages">
-        <Row label="SF Draw %" hint="Default: 90%">
-          <NumInput value={data.draw_pct_sf} onChange={v => update('draw_pct_sf', v)} pct />
-        </Row>
-        <Row label="MF Draw %" hint="Default: 92%">
-          <NumInput value={data.draw_pct_mf} onChange={v => update('draw_pct_mf', v)} pct />
-        </Row>
-        <Row label="Active Loans Draw %" hint="Applied to existing portfolio">
-          <NumInput value={data.draw_pct_active} onChange={v => update('draw_pct_active', v)} pct />
-        </Row>
-      </Section>
-
-      {/* Interest Rates */}
-      <Section title="Interest Rates">
-        <Row label="Rate — Projected Loans" hint="5.25% default">
-          <NumInput value={data.rate_projected_loans} onChange={v => update('rate_projected_loans', v)} pct />
-        </Row>
-        <Row label="Rate — Land Bucket" hint="5.25% default">
-          <NumInput value={data.rate_land_bucket} onChange={v => update('rate_land_bucket', v)} pct />
-        </Row>
-      </Section>
-
       {/* Profit Sharing */}
       <Section title="Profit Sharing (per unit)">
         <Row label="Holmes SFR"><NumInput value={data.ps_holmes_sfr} onChange={v => update('ps_holmes_sfr', v)} /></Row>
@@ -152,10 +129,13 @@ export default function AssumptionsPage() {
 
           To plan new starts: New Originations tab → New Entry. */}
 
-      {/* Loan Programs — drives new vertical-start cohorts */}
-      <Section title="Loan Programs (New Vertical Starts)">
+      {/* Loan Programs — single source of truth for new-origination rates,
+          terms and draw curves. Mirrored in the New Originations tab. */}
+      <Section title="Loan Programs · source of truth for rates &amp; draw curves">
         <p className="text-xs text-fg-dim mb-3">
-          Draw curve, default rate, and term applied to every new vertical loan cohort.
+          These are the assumptions the forecast actually uses. The rate, term, and
+          draw curve below feed every new vertical loan cohort — the same rate
+          shows up per entry on the New Originations tab (overridable there).
           When a lot sells, a cohort is originated under the program assigned to that Land
           Bucket project and ramps its balance through this curve.
         </p>
@@ -187,20 +167,67 @@ export default function AssumptionsPage() {
                   </div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-fg-dim mb-1">
-                    Draw curve (incremental monthly fractions, comma-separated; sum ≈ 1.0)
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="text-[10px] text-fg-dim">
+                      Draw curve — incremental % of max balance per month (sum ≈ 100%)
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        className="btn-ghost text-[10px] px-1.5 py-0.5"
+                        onClick={() => {
+                          const len = Math.max(24, p.draw_curve.length)
+                          updateProgram(p.id, {
+                            draw_curve: Array.from({ length: len + 1 }, (_, j) => p.draw_curve[j] ?? 0),
+                          })
+                        }}
+                      >+ Month</button>
+                      <button
+                        type="button"
+                        className="btn-ghost text-[10px] px-1.5 py-0.5 disabled:opacity-40"
+                        disabled={Math.max(24, p.draw_curve.length) <= 24}
+                        onClick={() => {
+                          const len = Math.max(24, p.draw_curve.length)
+                          if (len <= 24) return
+                          updateProgram(p.id, { draw_curve: p.draw_curve.slice(0, len - 1) })
+                        }}
+                      >− Month</button>
+                    </div>
                   </div>
-                  <input
-                    className="form-input text-xs font-mono"
-                    value={p.draw_curve.join(', ')}
-                    onChange={e => {
-                      const parts = e.target.value.split(',').map(s => Number(s.trim()))
-                      if (parts.every(n => !isNaN(n))) updateProgram(p.id, { draw_curve: parts })
-                    }}
-                  />
-                  <div className="text-[10px] text-fg-dim mt-1">
-                    Months: {p.draw_curve.length} · sum: {p.draw_curve.reduce((a, b) => a + b, 0).toFixed(3)}
-                  </div>
+                  {(() => {
+                    // Show at least 24 month inputs; never truncate a longer
+                    // curve (e.g. an 18- or 30-month program). The stored
+                    // curve is fractions; the grid edits percentages.
+                    const count = Math.max(24, p.draw_curve.length)
+                    const sumPct = p.draw_curve.reduce((a, b) => a + b, 0) * 100
+                    return (
+                      <>
+                        <div className="grid grid-cols-4 md:grid-cols-6 gap-2">
+                          {Array.from({ length: count }, (_, i) => (
+                            <div key={i}>
+                              <div className="text-[10px] text-fg-dim mb-0.5 text-center">M{i + 1}</div>
+                              <input
+                                type="number"
+                                step="1"
+                                min="0"
+                                className="form-input text-right text-xs"
+                                value={Math.round((p.draw_curve[i] ?? 0) * 100)}
+                                onChange={e => {
+                                  const pct = Math.round(Number(e.target.value))
+                                  const next = Array.from({ length: count }, (_, j) => p.draw_curve[j] ?? 0)
+                                  next[i] = !isFinite(pct) || pct < 0 ? 0 : pct / 100
+                                  updateProgram(p.id, { draw_curve: next })
+                                }}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                        <div className="text-[10px] text-fg-dim mt-2">
+                          Months: {count} · sum: {Math.round(sumPct)}%
+                        </div>
+                      </>
+                    )
+                  })()}
                 </div>
               </div>
             ))}

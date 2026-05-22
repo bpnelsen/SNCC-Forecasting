@@ -12,6 +12,7 @@ import {
   MonthlyBalance,
   ForecastResult,
   NewOriginationEntry,
+  HHHJVProject,
 } from './types'
 
 // Vertical loan amount = lot_price × this multiple. Quick default until the
@@ -58,6 +59,8 @@ interface LotOrigination {
   max_amount_per_loan: number
   program: LoanProgram
   project_id: string
+  // Optional per-entry rate override (fraction). null = use program.default_rate.
+  rate_override: number | null
 }
 
 interface LandBucketRunResult {
@@ -136,6 +139,7 @@ function runLandBucket(
           max_amount_per_loan: amountPerLoan,
           program: verticalProgram,
           project_id: project.id,
+          rate_override: null,
         })
         newOrigsCount = lotsThisMonth
         newOrigsAmount = lotsThisMonth * amountPerLoan
@@ -209,6 +213,29 @@ function projectExistingLoanBalance(
   return maxAmount > 0 ? maxAmount : 0
 }
 
+// Outstanding (cash actually drawn) for an existing loan. Same maturity gate
+// as projectExistingLoanBalance, but valued at loan_amount_disbursed instead
+// of the committed/face amount — held flat until the loan matures, then 0.
+function projectExistingLoanOutstanding(loan: Loan, monthDate: Date): number {
+  if (loan.current_loan_due_date) {
+    const dueDate = parseISO(loan.current_loan_due_date)
+    if (monthDate >= dueDate) return 0
+  }
+  return loan.loan_amount_disbursed > 0 ? loan.loan_amount_disbursed : 0
+}
+
+// HHH/JV project contribution for a given forecast month key ('YYYY-MM').
+// balance_outstanding applies from dev_start_date's month (inclusive, or
+// immediately if null) until dev_end_date's month (exclusive, or the whole
+// horizon if null). YYYY-MM string compare is chronological.
+function hhhJvBalanceForMonth(p: HHHJVProject, monthKey: string): number {
+  const startKey = p.dev_start_date ? p.dev_start_date.slice(0, 7) : null
+  const endKey   = p.dev_end_date ? p.dev_end_date.slice(0, 7) : null
+  if (startKey && monthKey < startKey) return 0
+  if (endKey && monthKey >= endKey) return 0
+  return p.balance_outstanding > 0 ? p.balance_outstanding : 0
+}
+
 // Lot-driven origination cohort balance at month index `m`.
 function lotOriginationBalance(orig: LotOrigination, m: number): number {
   const age = m - orig.origination_month_idx
@@ -225,6 +252,7 @@ export interface ForecastInput {
   builders: Builder[]
   loanPrograms: LoanProgram[]
   newOriginations: NewOriginationEntry[]
+  hhhJvProjects: HHHJVProject[]
   settings: ForecastSettings
   versionLabel: string
   asOfDate: string
@@ -296,6 +324,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
         max_amount_per_loan: entry.avg_loan_amount,
         program,
         project_id: entry.land_bucket_project_id ?? entry.id,
+        rate_override: entry.interest_rate ?? null,
       })
     }
   }
@@ -322,6 +351,9 @@ export function runForecast(input: ForecastInput): ForecastResult {
     UNKNOWN: [],
   }
   for (const l of input.loans) loansByType[l.loan_type].push(l)
+
+  const sumDisbursed = (loans: Loan[]) =>
+    loans.reduce((s, l) => s + (l.loan_amount_disbursed || 0), 0)
 
   const monthly: MonthlyBalance[] = []
   let prevTotalAll = 0
@@ -355,7 +387,22 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const and = and_existing + newBySegment.and
     const raw_land = raw_existing + newBySegment.raw_land
     const finished_lots = fl_existing + newBySegment.finished_lots
-    const hhh = hhh_existing + newBySegment.hhh
+    // HHH/JV projects feed the HHH/JV segment (balance == outstanding).
+    const hhhJv = input.hhhJvProjects.reduce(
+      (s, p) => s + hhhJvBalanceForMonth(p, m.key), 0)
+    const hhh = hhh_existing + newBySegment.hhh + hhhJv
+
+    // Outstanding (drawn) per segment: existing loans valued at disbursed
+    // (decays at maturity) + forecasted cohorts (already a drawn balance).
+    const sumExistingOut = (loans: Loan[]) =>
+      loans.reduce((s, l) => s + projectExistingLoanOutstanding(l, m.date), 0)
+    const outstanding_sfr           = sumExistingOut(loansByType.SFR)           + newBySegment.sfr
+    const outstanding_mfr           = sumExistingOut(loansByType.MFR)           + newBySegment.mfr
+    const outstanding_and           = sumExistingOut(loansByType['A&D'])        + newBySegment.and
+    const outstanding_raw_land      = sumExistingOut(loansByType.RAW_LAND)      + newBySegment.raw_land
+    const outstanding_finished_lots = sumExistingOut(loansByType.FINISHED_LOTS) + newBySegment.finished_lots
+    const outstanding_hhh           = sumExistingOut(loansByType.HHH) +
+                                      sumExistingOut(loansByType.UNKNOWN) + newBySegment.hhh + hhhJv
 
     const land_bucket = lb.totals[i].ending_balance
     const total_loans = sfr + mfr + and + raw_land + finished_lots + hhh
@@ -370,7 +417,8 @@ export function runForecast(input: ForecastInput): ForecastResult {
     }
     let yield_projected = 0
     for (const orig of allOriginations) {
-      yield_projected += lotOriginationBalance(orig, i) * orig.program.default_rate / 12
+      const rate = orig.rate_override ?? orig.program.default_rate
+      yield_projected += lotOriginationBalance(orig, i) * rate / 12
     }
     const yield_land_bucket = lb.totals[i].interest_income
     const total_income = yield_active + yield_projected + yield_land_bucket
@@ -416,6 +464,12 @@ export function runForecast(input: ForecastInput): ForecastResult {
       land_bucket,
       total_loans,
       total_all,
+      outstanding_sfr,
+      outstanding_mfr,
+      outstanding_and,
+      outstanding_raw_land,
+      outstanding_finished_lots,
+      outstanding_hhh,
       variance,
       new_originations_sfr: newBySegment.sfr,
       new_originations_mfr: newBySegment.mfr,
@@ -448,6 +502,15 @@ export function runForecast(input: ForecastInput): ForecastResult {
     as_of_date: input.asOfDate,
     version_label: input.versionLabel,
     total_active_loans: input.loans.length,
+    active_loans_outstanding: {
+      sfr:           sumDisbursed(loansByType.SFR),
+      mfr:           sumDisbursed(loansByType.MFR),
+      and:           sumDisbursed(loansByType['A&D']),
+      raw_land:      sumDisbursed(loansByType.RAW_LAND),
+      finished_lots: sumDisbursed(loansByType.FINISHED_LOTS),
+      hhh:           sumDisbursed(loansByType.HHH) + sumDisbursed(loansByType.UNKNOWN),
+      total:         input.loans.reduce((s, l) => s + (l.loan_amount_disbursed || 0), 0),
+    },
     current_balances: {
       sfr: m0.sfr,
       mfr: m0.mfr,

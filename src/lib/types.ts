@@ -221,6 +221,9 @@ export interface NewOriginationEntry {  id: string
   loan_count: number
   avg_loan_amount: number
   loan_program_id: string | null
+  // Per-entry interest rate override (fraction, e.g. 0.0525). null = fall
+  // back to the entry's loan_program.default_rate at calc time.
+  interest_rate: number | null
   // Cap on cumulative loans started by this entry. null / 0 = no cap.
   total_lots: number | null
   // Inclusive calendar stop, 'YYYY-MM'. null = no date stop.

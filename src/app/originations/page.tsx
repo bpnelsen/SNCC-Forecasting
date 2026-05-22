@@ -17,6 +17,7 @@ const emptyForm = (): FormState => ({
   loan_count: 0,
   avg_loan_amount: 0,
   loan_program_id: null,
+  interest_rate: null,
   total_lots: null,
   end_month: null,
   monthly_mode: 'fixed',
@@ -178,12 +179,13 @@ export default function OriginationsPage() {
                 <th className="text-right">Avg Loan ($)</th>
                 <th className="text-right">Total ($)</th>
                 <th>Loan Program</th>
+                <th className="text-right">Interest Rate</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {entries.length === 0 ? (
-                <tr><td colSpan={10} className="text-center text-xs text-fg-dim py-8">
+                <tr><td colSpan={11} className="text-center text-xs text-fg-dim py-8">
                   No new-origination entries yet. Click <span className="text-accent">New Entry</span> to add one.
                 </td></tr>
               ) : grouped.map(builderGroup => (
@@ -205,6 +207,7 @@ export default function OriginationsPage() {
                   <td className="num">{grand.count}</td>
                   <td className="num text-fg-dim">—</td>
                   <td className="num">{formatCurrency(grand.amount, true)}</td>
+                  <td className="text-fg-dim">—</td>
                   <td className="text-fg-dim">—</td>
                   <td />
                 </tr>
@@ -341,6 +344,13 @@ function BuilderBlock({
                   <td className="num">{formatCurrency(e.avg_loan_amount, true)}</td>
                   <td className="num">{formatCurrency(t.amount, true)}</td>
                   <td>{prog?.name ?? <span className="text-fg-dim">builder default</span>}</td>
+                  <td className="num">
+                    {e.interest_rate != null
+                      ? `${(e.interest_rate * 100).toFixed(2)}%`
+                      : prog
+                        ? <span className="text-fg-dim">{(prog.default_rate * 100).toFixed(2)}%</span>
+                        : <span className="text-fg-dim">program</span>}
+                  </td>
                   <td className="flex gap-1">
                     <button onClick={() => onEdit(e)} className="btn-ghost">
                       <Pencil className="w-3 h-3" />
@@ -361,7 +371,7 @@ function BuilderBlock({
                 <td className="num">{projSubtotal.count}</td>
                 <td className="num">—</td>
                 <td className="num">{formatCurrency(projSubtotal.amount, true)}</td>
-                <td colSpan={2} />
+                <td colSpan={3} />
               </tr>
             )}
           </>
@@ -375,7 +385,7 @@ function BuilderBlock({
         <td className="num">{builderSubtotal.count}</td>
         <td className="num text-fg-dim">—</td>
         <td className="num">{formatCurrency(builderSubtotal.amount, true)}</td>
-        <td colSpan={2} />
+        <td colSpan={3} />
       </tr>
     </>
   )
@@ -459,6 +469,17 @@ function EntryEditor({
               <option value="">— builder default —</option>
               {programs.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
+          </div>
+          <div>
+            <div className="text-[10px] text-fg-dim mb-1">
+              Interest Rate (%) <span className="italic">— blank = program default</span>
+            </div>
+            <input type="number" step="0.01" min="0"
+                   className="form-input text-right"
+                   value={form.interest_rate == null ? '' : (form.interest_rate * 100).toFixed(2)}
+                   onChange={e => u({
+                     interest_rate: e.target.value === '' ? null : Number(e.target.value) / 100,
+                   })} />
           </div>
 
           <div className="col-span-2 border-t border-border pt-3 mt-1">

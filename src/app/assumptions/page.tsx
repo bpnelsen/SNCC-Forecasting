@@ -112,29 +112,6 @@ export default function AssumptionsPage() {
         </div>
       )}
 
-      {/* Draw Percentages */}
-      <Section title="Draw Percentages">
-        <Row label="SF Draw %" hint="Default: 90%">
-          <NumInput value={data.draw_pct_sf} onChange={v => update('draw_pct_sf', v)} pct />
-        </Row>
-        <Row label="MF Draw %" hint="Default: 92%">
-          <NumInput value={data.draw_pct_mf} onChange={v => update('draw_pct_mf', v)} pct />
-        </Row>
-        <Row label="Active Loans Draw %" hint="Applied to existing portfolio">
-          <NumInput value={data.draw_pct_active} onChange={v => update('draw_pct_active', v)} pct />
-        </Row>
-      </Section>
-
-      {/* Interest Rates */}
-      <Section title="Interest Rates">
-        <Row label="Rate — Projected Loans" hint="5.25% default">
-          <NumInput value={data.rate_projected_loans} onChange={v => update('rate_projected_loans', v)} pct />
-        </Row>
-        <Row label="Rate — Land Bucket" hint="5.25% default">
-          <NumInput value={data.rate_land_bucket} onChange={v => update('rate_land_bucket', v)} pct />
-        </Row>
-      </Section>
-
       {/* Profit Sharing */}
       <Section title="Profit Sharing (per unit)">
         <Row label="Holmes SFR"><NumInput value={data.ps_holmes_sfr} onChange={v => update('ps_holmes_sfr', v)} /></Row>
@@ -152,10 +129,13 @@ export default function AssumptionsPage() {
 
           To plan new starts: New Originations tab → New Entry. */}
 
-      {/* Loan Programs — drives new vertical-start cohorts */}
-      <Section title="Loan Programs (New Vertical Starts)">
+      {/* Loan Programs — single source of truth for new-origination rates,
+          terms and draw curves. Mirrored in the New Originations tab. */}
+      <Section title="Loan Programs · source of truth for rates &amp; draw curves">
         <p className="text-xs text-fg-dim mb-3">
-          Draw curve, default rate, and term applied to every new vertical loan cohort.
+          These are the assumptions the forecast actually uses. The rate, term, and
+          draw curve below feed every new vertical loan cohort — the same rate
+          shows up per entry on the New Originations tab (overridable there).
           When a lot sells, a cohort is originated under the program assigned to that Land
           Bucket project and ramps its balance through this curve.
         </p>

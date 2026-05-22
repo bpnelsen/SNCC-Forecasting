@@ -35,6 +35,8 @@ export async function POST(req: NextRequest) {
       loan_count:             Number(body.loan_count) || 0,
       avg_loan_amount:        Number(body.avg_loan_amount) || 0,
       loan_program_id:        body.loan_program_id || null,
+      interest_rate:          body.interest_rate === '' || body.interest_rate == null
+                                ? null : Number(body.interest_rate),
       total_lots:             body.total_lots === '' || body.total_lots == null
                                 ? null : Number(body.total_lots),
       end_month:              body.end_month && /^\d{4}-\d{2}$/.test(String(body.end_month))

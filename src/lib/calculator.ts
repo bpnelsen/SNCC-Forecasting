@@ -59,6 +59,8 @@ interface LotOrigination {
   max_amount_per_loan: number
   program: LoanProgram
   project_id: string
+  // Optional per-entry rate override (fraction). null = use program.default_rate.
+  rate_override: number | null
 }
 
 interface LandBucketRunResult {
@@ -137,6 +139,7 @@ function runLandBucket(
           max_amount_per_loan: amountPerLoan,
           program: verticalProgram,
           project_id: project.id,
+          rate_override: null,
         })
         newOrigsCount = lotsThisMonth
         newOrigsAmount = lotsThisMonth * amountPerLoan
@@ -321,6 +324,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
         max_amount_per_loan: entry.avg_loan_amount,
         program,
         project_id: entry.land_bucket_project_id ?? entry.id,
+        rate_override: entry.interest_rate ?? null,
       })
     }
   }
@@ -413,7 +417,8 @@ export function runForecast(input: ForecastInput): ForecastResult {
     }
     let yield_projected = 0
     for (const orig of allOriginations) {
-      yield_projected += lotOriginationBalance(orig, i) * orig.program.default_rate / 12
+      const rate = orig.rate_override ?? orig.program.default_rate
+      yield_projected += lotOriginationBalance(orig, i) * rate / 12
     }
     const yield_land_bucket = lb.totals[i].interest_income
     const total_income = yield_active + yield_projected + yield_land_bucket

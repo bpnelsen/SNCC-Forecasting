@@ -1,11 +1,19 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  Landmark, Plus, Save, Trash2, X, AlertCircle, CheckCircle, Pencil,
+  Landmark, Plus, Save, Trash2, X, AlertCircle, CheckCircle, Pencil, TrendingDown,
 } from 'lucide-react'
-import { LandBucketProject, Builder, LoanProgram } from '@/lib/types'
+import { LandBucketProject, Builder, LoanProgram, ForecastResult } from '@/lib/types'
 import { formatCurrency } from '@/lib/utils'
+import { LandBucketProjectionChart } from '@/components/charts/PortfolioCharts'
+
+// Deterministic palette for the stacked-area projection chart — projects are
+// sorted by name before colors are assigned so the mapping is stable.
+const PROJECT_PALETTE = [
+  '#58A6FF', '#D4A853', '#3FB950', '#A371F7', '#F85149', '#79C0FF',
+  '#56D364', '#FF9E45', '#9CA3AF', '#EF6B6B', '#6EE7B7', '#FCD34D',
+]
 
 type FormState = Omit<LandBucketProject, 'id'> & { id?: string }
 
@@ -30,6 +38,7 @@ export default function LandBucketPage() {
   const [projects, setProjects] = useState<LandBucketProject[]>([])
   const [builders, setBuilders] = useState<Builder[]>([])
   const [programs, setPrograms] = useState<LoanProgram[]>([])
+  const [forecast, setForecast] = useState<ForecastResult | null>(null)
   const [loading, setLoading]   = useState(true)
   const [editing, setEditing]   = useState<FormState | null>(null)
   const [busy, setBusy]         = useState(false)
@@ -38,14 +47,18 @@ export default function LandBucketPage() {
   const load = async () => {
     setLoading(true)
     try {
-      const [p, b, lp] = await Promise.all([
+      const [p, b, lp, fc] = await Promise.all([
         fetch('/api/land-bucket-projects').then(r => r.json()),
         fetch('/api/builders').then(r => r.json()),
         fetch('/api/loan-programs').then(r => r.json()),
+        // Forecast is best-effort — a bad import or missing config shouldn't
+        // block the project editor. Empty schedule just hides the projection.
+        fetch('/api/calculate').then(r => r.ok ? r.json() : null).catch(() => null),
       ])
       setProjects(Array.isArray(p) ? p : [])
       setBuilders(Array.isArray(b) ? b : [])
       setPrograms(Array.isArray(lp) ? lp : [])
+      setForecast(fc && !fc.error ? fc : null)
     } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
@@ -111,6 +124,8 @@ export default function LandBucketPage() {
           {msg.text}
         </div>
       )}
+
+      <ProjectionCard forecast={forecast} projects={projects} />
 
       <div className="card fade-up fade-up-1.5 p-3 mb-2 flex items-center gap-2 flex-wrap">
         <span className="text-xs font-medium text-fg-dim mr-2">Builders:</span>
@@ -601,4 +616,180 @@ function sumProjects(projects: LandBucketProject[]): {
     if (p.absorption_rate != null) absorption = (absorption ?? 0) + p.absorption_rate
   }
   return { lots, balance, absorption }
+}
+
+// ─── Projection card ─────────────────────────────────────────────────────────
+// Stacked-area chart of each project's balance over the forecast horizon plus
+// an aggregate table of balance / lot sales / lots remaining. Pulls the
+// per-project schedules out of /api/calculate's ForecastResult, so the figures
+// agree with the dashboard's Land Bucket tile (month 0 = Grand total).
+
+function ProjectionCard({
+  forecast, projects,
+}: {
+  forecast: ForecastResult | null
+  projects: LandBucketProject[]
+}) {
+  // Resolve per-project color from the deterministic palette (sort by name
+  // first so the order is stable across reloads).
+  const projectSeries = useMemo(() => {
+    if (!forecast) return [] as { name: string; color: string }[]
+    const names = [...forecast.land_bucket_schedules]
+      .map(s => s.project_name)
+      .sort((a, b) => a.localeCompare(b))
+    return names.map((name, i) => ({ name, color: PROJECT_PALETTE[i % PROJECT_PALETTE.length] }))
+  }, [forecast])
+
+  // One chart row per forecast month, plus a key per project whose value is
+  // that project's starting_balance for the month (matches Land Bucket tab
+  // Grand total at month 0).
+  const chartData = useMemo(() => {
+    if (!forecast) return []
+    return forecast.months.map((m, i) => {
+      const row: Record<string, number | string> = { label: m.label, month: m.month }
+      for (const sch of forecast.land_bucket_schedules) {
+        row[sch.project_name] = sch.months[i]?.starting_balance ?? 0
+      }
+      return row
+    })
+  }, [forecast])
+
+  // Aggregate metrics, summed across projects each month.
+  const aggregate = useMemo(() => {
+    if (!forecast) {
+      return [] as { month: string; label: string; balance: number; lotsSold: number;
+                     lotsCum: number; lotsRemaining: number; proceeds: number }[]
+    }
+    return forecast.months.map((m, i) => {
+      let lotsCum = 0
+      let lotsRemaining = 0
+      for (const sch of forecast.land_bucket_schedules) {
+        const row = sch.months[i]
+        if (!row) continue
+        lotsCum       += row.lots_sold_cumulative
+        lotsRemaining += row.lots_remaining
+      }
+      return {
+        month: m.month,
+        label: m.label,
+        balance: m.land_bucket,
+        lotsSold: m.lots_sold,
+        proceeds: m.lot_sale_proceeds,
+        lotsCum,
+        lotsRemaining,
+      }
+    })
+  }, [forecast])
+
+  if (!forecast || forecast.land_bucket_schedules.length === 0) {
+    return (
+      <div className="card fade-up fade-up-1.5 p-4">
+        <div className="flex items-center gap-2 mb-1">
+          <TrendingDown className="w-4 h-4 text-accent" />
+          <span className="text-sm font-medium text-fg-strong">Land Bucket Projection</span>
+        </div>
+        <p className="text-xs text-fg-dim">
+          {projects.length === 0
+            ? 'Add a project below to see the projection.'
+            : 'No forecast data yet. Once a Current Report is imported and the engine runs, the projection will appear here.'}
+        </p>
+      </div>
+    )
+  }
+
+  const lastBalance = aggregate[aggregate.length - 1]?.balance ?? 0
+  const firstBalance = aggregate[0]?.balance ?? 0
+  const totalProceeds = aggregate.reduce((s, r) => s + r.proceeds, 0)
+  const totalLotsSold = aggregate.reduce((s, r) => s + r.lotsSold, 0)
+
+  return (
+    <div className="card fade-up fade-up-1.5">
+      <div className="card-header flex items-center justify-between">
+        <span className="card-title flex items-center gap-2">
+          <TrendingDown className="w-4 h-4 text-accent" />
+          Land Bucket Projection
+        </span>
+        <span className="text-[10px] text-fg-dim font-mono">
+          {aggregate[0]?.label} → {aggregate[aggregate.length - 1]?.label}
+        </span>
+      </div>
+
+      {/* KPI strip */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4 border-b border-border">
+        <Kpi label="Starting balance"   value={formatCurrency(firstBalance, true)} />
+        <Kpi label={`End balance · ${aggregate[aggregate.length - 1]?.label ?? '—'}`}
+             value={formatCurrency(lastBalance, true)} />
+        <Kpi label="Total lots sold"    value={String(totalLotsSold)} />
+        <Kpi label="Total sale proceeds" value={formatCurrency(totalProceeds, true)} />
+      </div>
+
+      {/* Stacked area chart, one series per project */}
+      <div className="p-4">
+        <LandBucketProjectionChart data={chartData} projects={projectSeries} />
+        <div className="mt-2 flex items-center gap-3 flex-wrap text-[10px] text-fg-dim">
+          {projectSeries.map(p => (
+            <span key={p.name} className="inline-flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full" style={{ background: p.color }} />
+              {p.name}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Aggregate table, months across, metrics down */}
+      <div className="overflow-x-auto border-t border-border">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th className="sticky left-0 z-10 bg-surface">Metric</th>
+              {aggregate.map(r => <th key={r.month} className="text-right">{r.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="bg-border/30 font-medium text-fg-strong">
+              <td className="sticky left-0 z-10 bg-border/30 text-fg-strong">Balance</td>
+              {aggregate.map(r => (
+                <td key={r.month} className="num">{formatCurrency(r.balance, true)}</td>
+              ))}
+            </tr>
+            <tr>
+              <td className="sticky left-0 z-10 bg-surface text-fg">Lots sold</td>
+              {aggregate.map(r => (
+                <td key={r.month} className="num">{r.lotsSold || <span className="text-fg-dim">—</span>}</td>
+              ))}
+            </tr>
+            <tr>
+              <td className="sticky left-0 z-10 bg-surface text-fg">Sale proceeds</td>
+              {aggregate.map(r => (
+                <td key={r.month} className="num">
+                  {r.proceeds ? formatCurrency(r.proceeds, true) : <span className="text-fg-dim">—</span>}
+                </td>
+              ))}
+            </tr>
+            <tr>
+              <td className="sticky left-0 z-10 bg-surface text-fg">Lots sold (cum.)</td>
+              {aggregate.map(r => (
+                <td key={r.month} className="num">{r.lotsCum || <span className="text-fg-dim">—</span>}</td>
+              ))}
+            </tr>
+            <tr>
+              <td className="sticky left-0 z-10 bg-surface text-fg">Lots remaining</td>
+              {aggregate.map(r => (
+                <td key={r.month} className="num">{r.lotsRemaining}</td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function Kpi({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-fg-dim mb-0.5">{label}</div>
+      <div className="text-sm font-medium text-fg-strong font-mono">{value}</div>
+    </div>
+  )
 }

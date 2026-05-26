@@ -54,6 +54,34 @@ function CustomTooltip({ active, payload, label }: any) {
 
 interface ChartProps { data: MonthlyBalance[] }
 
+// Stacked area chart for the Land Bucket projection. Each project becomes
+// one stacked series so callers see both the aggregate trajectory and the
+// per-project contribution. Recharts needs string data keys, so project
+// names are passed alongside their resolved colors.
+interface LandBucketProjectionChartProps {
+  data: Array<Record<string, number | string>>
+  projects: { name: string; color: string }[]
+}
+
+export function LandBucketProjectionChart({ data, projects }: LandBucketProjectionChartProps) {
+  return (
+    <ResponsiveContainer width="100%" height={260}>
+      <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={CHROME.grid} vertical={false} />
+        <XAxis dataKey="label" tick={{ fill: CHROME.text, fontSize: 10 }} tickLine={false} axisLine={false} />
+        <YAxis tick={{ fill: CHROME.text, fontSize: 10 }} tickLine={false} axisLine={false}
+               tickFormatter={v => formatCurrency(v, true)} width={55} />
+        <Tooltip content={<CustomTooltip />} />
+        {projects.map(p => (
+          <Area key={p.name} type="monotone" dataKey={p.name}
+                stackId="lb" stroke={p.color} fill={p.color}
+                fillOpacity={0.35} strokeWidth={1.5} />
+        ))}
+      </AreaChart>
+    </ResponsiveContainer>
+  )
+}
+
 export function TotalBalanceChart({ data }: ChartProps) {
   return (
     <ResponsiveContainer width="100%" height={220}>

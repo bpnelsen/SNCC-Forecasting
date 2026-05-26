@@ -271,6 +271,10 @@ export interface LandBucketMonth {
   lots_sold_cumulative: number
   lots_remaining: number
   sale_proceeds: number
+  // Balance at the START of the month, before this month's sale activity.
+  // Month 0 = sum of project.balance_outstanding (the Land Bucket tab's
+  // "Grand total"); month i = previous month's ending_balance.
+  starting_balance: number
   ending_balance: number
   interest_income: number
   new_vertical_origs_count: number

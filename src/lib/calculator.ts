@@ -84,6 +84,7 @@ function runLandBucket(
     lots_sold_cumulative: 0,
     lots_remaining: 0,
     sale_proceeds: 0,
+    starting_balance: 0,
     ending_balance: 0,
     interest_income: 0,
     new_vertical_origs_count: 0,
@@ -108,6 +109,10 @@ function runLandBucket(
     for (let i = 0; i < months.length; i++) {
       const { date: monthDate, key, label } = months[i]
       const lotsRemaining = Math.max(0, project.total_lots - lotsSoldCum)
+      // Captured BEFORE any sale activity this month, so month 0's starting
+      // balance = project.balance_outstanding (matches the Land Bucket tab's
+      // Grand total). Subsequent months pick up the prior month's ending.
+      const startingBalance = balance
 
       // Interest computed on starting balance — fixed rate, paid current.
       const interestIncome = balance * project.interest_rate / 12
@@ -152,6 +157,7 @@ function runLandBucket(
         lots_sold_cumulative: lotsSoldCum,
         lots_remaining: project.total_lots - lotsSoldCum,
         sale_proceeds: proceeds,
+        starting_balance: startingBalance,
         ending_balance: balance,
         interest_income: interestIncome,
         new_vertical_origs_count: newOrigsCount,
@@ -163,6 +169,7 @@ function runLandBucket(
       t.lots_sold_cumulative += lotsSoldCum
       t.lots_remaining += project.total_lots - lotsSoldCum
       t.sale_proceeds += proceeds
+      t.starting_balance += startingBalance
       t.ending_balance += balance
       t.interest_income += interestIncome
       t.new_vertical_origs_count += newOrigsCount
@@ -419,7 +426,10 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const outstanding_hhh           = sumExistingOut(loansByType.HHH) +
                                       sumExistingOut(loansByType.UNKNOWN) + newBySegment.hhh + hhhJv
 
-    const land_bucket = lb.totals[i].ending_balance
+    // Use the starting balance so the Dashboard tile / Total (All) anchor to
+    // the Land Bucket tab's Grand total (Σ balance_outstanding) at month 0,
+    // then move with each month's net activity going forward.
+    const land_bucket = lb.totals[i].starting_balance
     const total_loans = sfr + mfr + and + raw_land + finished_lots + hhh
     const total_all = total_loans + land_bucket
 

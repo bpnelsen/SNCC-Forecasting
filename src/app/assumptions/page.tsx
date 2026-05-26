@@ -145,11 +145,14 @@ export default function AssumptionsPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            {/* MFR Construction is hidden here on purpose — MFR cohorts are
-                modeled only through manual New Originations entries. The row
-                still exists in loan_programs and feeds the engine where
-                referenced by data (e.g. land bucket projects). */}
-            {programs.filter(p => p.name !== 'MFR Construction').map(p => (
+            {/* MFR Construction and SFR Construction are hidden here on
+                purpose — SFR/MFR cohorts are modeled only through manual New
+                Originations entries. The rows still exist in loan_programs and
+                feed the engine where referenced by data (e.g. land bucket
+                projects, builder defaults). */}
+            {programs
+              .filter(p => p.name !== 'MFR Construction' && p.name !== 'SFR Construction')
+              .map(p => (
               <div key={p.id} className="border border-border-strong rounded-lg p-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <div>

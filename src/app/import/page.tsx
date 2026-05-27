@@ -48,19 +48,19 @@ export default function ImportPage() {
   return (
     <div className="p-6 space-y-6 max-w-2xl">
       <div className="fade-up fade-up-1">
-        <h1 className="text-lg font-medium text-[#E6EDF3] flex items-center gap-2">
-          <Upload className="w-5 h-5 text-[#D4A853]" />
+        <h1 className="text-lg font-medium text-fg-strong flex items-center gap-2">
+          <Upload className="w-5 h-5 text-accent" />
           Import Current Report
         </h1>
-        <p className="text-xs text-[#8B949E] mt-0.5">Upload a .xlsx Current Report export to create a new version</p>
+        <p className="text-xs text-fg-dim mt-0.5">Upload a .xlsx Current Report export to create a new version</p>
       </div>
 
       {result && (
-        <div className="flex items-start gap-2 p-4 rounded-lg bg-[#238636]/10 border border-[#238636]/30 text-sm fade-up fade-up-1">
-          <CheckCircle className="w-4 h-4 text-[#3FB950] mt-0.5 shrink-0" />
+        <div className="flex items-start gap-2 p-4 rounded-lg bg-success/10 border border-success/30 text-sm fade-up fade-up-1">
+          <CheckCircle className="w-4 h-4 text-success-light mt-0.5 shrink-0" />
           <div>
-            <div className="text-[#3FB950] font-medium">Import successful!</div>
-            <div className="text-[#8B949E] mt-0.5 text-xs">
+            <div className="text-success-light font-medium">Import successful!</div>
+            <div className="text-fg-dim mt-0.5 text-xs">
               "{result.label}" — {result.loan_count} loans imported and set as active version.
             </div>
           </div>
@@ -68,11 +68,11 @@ export default function ImportPage() {
       )}
 
       {error && (
-        <div className="flex items-start gap-2 p-4 rounded-lg bg-[#DA3633]/10 border border-[#DA3633]/30 text-sm">
-          <AlertCircle className="w-4 h-4 text-[#F85149] mt-0.5 shrink-0" />
+        <div className="flex items-start gap-2 p-4 rounded-lg bg-danger-strong/10 border border-danger-strong/30 text-sm">
+          <AlertCircle className="w-4 h-4 text-danger mt-0.5 shrink-0" />
           <div>
-            <div className="text-[#F85149] font-medium">Import failed</div>
-            <div className="text-[#8B949E] mt-0.5 text-xs">{error}</div>
+            <div className="text-danger font-medium">Import failed</div>
+            <div className="text-fg-dim mt-0.5 text-xs">{error}</div>
           </div>
         </div>
       )}
@@ -86,35 +86,35 @@ export default function ImportPage() {
             className={`
               border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all
               ${isDragActive
-                ? 'border-[#D4A853] bg-[#D4A853]/5'
+                ? 'border-accent bg-accent/5'
                 : file
-                  ? 'border-[#238636] bg-[#238636]/5'
-                  : 'border-[#30363D] hover:border-[#8B949E]'
+                  ? 'border-success bg-success/5'
+                  : 'border-border-strong hover:border-fg-dim'
               }
             `}
           >
             <input {...getInputProps()} />
             {file ? (
               <div className="flex items-center justify-center gap-3">
-                <FileSpreadsheet className="w-8 h-8 text-[#3FB950]" />
+                <FileSpreadsheet className="w-8 h-8 text-success-light" />
                 <div className="text-left">
-                  <div className="text-sm text-[#C9D1D9] font-medium">{file.name}</div>
-                  <div className="text-xs text-[#8B949E]">{(file.size / 1024).toFixed(0)} KB</div>
+                  <div className="text-sm text-fg font-medium">{file.name}</div>
+                  <div className="text-xs text-fg-dim">{(file.size / 1024).toFixed(0)} KB</div>
                 </div>
                 <button
                   onClick={e => { e.stopPropagation(); setFile(null) }}
-                  className="ml-2 text-[#8B949E] hover:text-[#F85149]"
+                  className="ml-2 text-fg-dim hover:text-danger"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
             ) : (
               <div>
-                <FileSpreadsheet className="w-8 h-8 text-[#8B949E] mx-auto mb-2" />
-                <div className="text-sm text-[#C9D1D9]">
+                <FileSpreadsheet className="w-8 h-8 text-fg-dim mx-auto mb-2" />
+                <div className="text-sm text-fg">
                   {isDragActive ? 'Drop the file here' : 'Drag & drop your .xlsx file here'}
                 </div>
-                <div className="text-xs text-[#8B949E] mt-1">or click to browse</div>
+                <div className="text-xs text-fg-dim mt-1">or click to browse</div>
               </div>
             )}
           </div>
@@ -154,8 +154,8 @@ export default function ImportPage() {
 
       {/* Help */}
       <div className="card fade-up fade-up-3 p-4">
-        <div className="text-xs font-medium text-[#C9D1D9] mb-2">What happens during import?</div>
-        <ul className="space-y-1.5 text-xs text-[#8B949E]">
+        <div className="text-xs font-medium text-fg mb-2">What happens during import?</div>
+        <ul className="space-y-1.5 text-xs text-fg-dim">
           <li>• The first sheet with a recognizable header row is parsed (any sheet name works)</li>
           <li>• Each loan is classified (SFR, MFR, A&D, Raw Land, Finished Lots, HHH)</li>
           <li>• Projected balance = MAX(disbursed, loan_amount × draw%)</li>

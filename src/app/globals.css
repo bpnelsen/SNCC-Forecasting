@@ -4,16 +4,51 @@
 
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
 
+/* ── Theme tokens ─────────────────────────────────────────────────────────── */
+/* Light is the default. Dark variant kicks in when <html class="dark"> is set. */
+/* Values are RGB triplets so Tailwind's alpha modifier (bg-surface/50) works.  */
 :root {
   --font-body: 'DM Sans', sans-serif;
   --font-mono: 'DM Mono', monospace;
+
+  --c-bg:             255 255 255;   /* page background */
+  --c-surface:        246 248 250;   /* cards, elevated surfaces */
+  --c-border:        208 215 222;    /* subtle borders, hover bg */
+  --c-border-strong: 140 149 159;    /* input border, separators */
+  --c-fg:             31  35  40;    /* body text */
+  --c-fg-strong:      13  17  23;    /* headings */
+  --c-fg-dim:         87  96 106;    /* muted / secondary text */
+  --c-accent:        191 139  48;    /* gold accent */
+  --c-accent-on:     255 255 255;    /* text color on accent bg */
+  --c-success:        26 127  55;
+  --c-success-light:  31 136  61;
+  --c-success-bright: 45 164  78;
+  --c-danger:        207  34  46;
+  --c-danger-strong: 164  14  38;
+}
+
+.dark {
+  --c-bg:              13  17  23;
+  --c-surface:         22  27  34;
+  --c-border:          33  38  45;
+  --c-border-strong:   48  54  61;
+  --c-fg:             201 209 217;
+  --c-fg-strong:      230 237 243;
+  --c-fg-dim:         139 148 158;
+  --c-accent:         212 168  83;
+  --c-accent-on:       13  17  23;
+  --c-success:         35 134  54;
+  --c-success-light:   63 185  80;
+  --c-success-bright:  86 211 100;
+  --c-danger:         248  81  73;
+  --c-danger-strong: 218  54  51;
 }
 
 * { box-sizing: border-box; }
 
 body {
-  background: #0D1117;
-  color: #C9D1D9;
+  background: rgb(var(--c-bg));
+  color: rgb(var(--c-fg));
   font-family: var(--font-body);
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
@@ -21,31 +56,31 @@ body {
 
 /* ── Card ─────────────────────────────────────────────────────────────────── */
 .card {
-  @apply bg-[#161B22] border border-[#21262D] rounded-xl overflow-hidden;
+  @apply bg-surface border border-border rounded-xl overflow-hidden;
 }
 .card-header {
-  @apply flex items-center justify-between px-4 py-3 border-b border-[#21262D];
+  @apply flex items-center justify-between px-4 py-3 border-b border-border;
 }
 .card-title {
-  @apply text-xs font-medium text-[#C9D1D9] uppercase tracking-wider;
+  @apply text-xs font-medium text-fg uppercase tracking-wider;
 }
 
 /* ── Buttons ──────────────────────────────────────────────────────────────── */
 .btn-primary {
-  @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#D4A853] text-[#0D1117]
+  @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-accent-on
          text-xs font-medium transition-opacity hover:opacity-90 disabled:opacity-50;
 }
 .btn-secondary {
-  @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#30363D]
-         text-[#8B949E] text-xs font-medium transition-colors hover:border-[#8B949E] hover:text-[#C9D1D9];
+  @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-strong
+         text-fg-dim text-xs font-medium transition-colors hover:border-fg-dim hover:text-fg;
 }
 .btn-ghost {
-  @apply inline-flex items-center gap-1.5 px-2 py-1 rounded text-[#8B949E] text-xs
-         transition-colors hover:text-[#C9D1D9] hover:bg-[#21262D];
+  @apply inline-flex items-center gap-1.5 px-2 py-1 rounded text-fg-dim text-xs
+         transition-colors hover:text-fg hover:bg-border/50;
 }
 .btn-danger {
-  @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#F85149]/40
-         text-[#F85149] text-xs font-medium transition-colors hover:bg-[#F85149]/10;
+  @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-danger/40
+         text-danger text-xs font-medium transition-colors hover:bg-danger/10;
 }
 
 /* ── Data table ───────────────────────────────────────────────────────────── */
@@ -53,31 +88,31 @@ body {
   @apply w-full text-xs;
 }
 .data-table thead tr {
-  @apply border-b border-[#21262D];
+  @apply border-b border-border;
 }
 .data-table th {
-  @apply px-4 py-2.5 text-left text-[10px] font-medium text-[#8B949E] uppercase tracking-wider whitespace-nowrap;
+  @apply px-4 py-2.5 text-left text-[10px] font-medium text-fg-dim uppercase tracking-wider whitespace-nowrap;
 }
 .data-table tbody tr {
-  @apply border-b border-[#21262D]/50 transition-colors hover:bg-[#21262D]/40;
+  @apply border-b border-border/50 transition-colors hover:bg-border/30;
 }
 .data-table td {
-  @apply px-4 py-2.5 text-[#8B949E] whitespace-nowrap;
+  @apply px-4 py-2.5 text-fg-dim whitespace-nowrap;
 }
 .data-table td.num {
   @apply text-right font-mono;
 }
-.data-table td.positive { @apply text-[#3FB950]; }
-.data-table td.negative { @apply text-[#F85149]; }
+.data-table td.positive { @apply text-success-light; }
+.data-table td.negative { @apply text-danger; }
 
 /* ── Form inputs ──────────────────────────────────────────────────────────── */
 .form-input {
-  @apply w-full bg-[#0D1117] border border-[#30363D] rounded-lg px-3 py-2 text-sm
-         text-[#C9D1D9] placeholder-[#8B949E] focus:outline-none focus:border-[#D4A853]
+  @apply w-full bg-bg border border-border-strong rounded-lg px-3 py-2 text-sm
+         text-fg placeholder-fg-dim focus:outline-none focus:border-accent
          transition-colors font-mono;
 }
 .form-label {
-  @apply block text-xs font-medium text-[#8B949E] mb-1;
+  @apply block text-xs font-medium text-fg-dim mb-1;
 }
 
 /* ── Fade-up animations ───────────────────────────────────────────────────── */
@@ -96,13 +131,13 @@ body {
 .badge {
   @apply inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium;
 }
-.badge-green  { @apply bg-[#238636]/30 text-[#3FB950]; }
-.badge-gold   { @apply bg-[#D4A853]/20 text-[#D4A853]; }
-.badge-steel  { @apply bg-[#21262D]    text-[#8B949E]; }
-.badge-red    { @apply bg-[#DA3633]/20 text-[#F85149]; }
+.badge-green  { @apply bg-success/20    text-success-light; }
+.badge-gold   { @apply bg-accent/20     text-accent; }
+.badge-steel  { @apply bg-border/60     text-fg-dim; }
+.badge-red    { @apply bg-danger/20     text-danger; }
 
 /* ── Scrollbars ───────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #0D1117; }
-::-webkit-scrollbar-thumb { background: #30363D; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #8B949E; }
+::-webkit-scrollbar-track { background: rgb(var(--c-bg)); }
+::-webkit-scrollbar-thumb { background: rgb(var(--c-border-strong)); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--c-fg-dim)); }

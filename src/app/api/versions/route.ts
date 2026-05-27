@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 
+// Opt out of Next 14's default static caching for GET route handlers — without
+// this, Vercel serves a build-time snapshot and DB writes (new imports, edits)
+// don't appear until the next deploy.
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   try {
     const sb = createServiceClient()

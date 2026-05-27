@@ -35,18 +35,18 @@ export default function VersionsPage() {
   return (
     <div className="p-6 space-y-6 max-w-4xl">
       <div className="fade-up fade-up-1">
-        <h1 className="text-lg font-medium text-[#E6EDF3] flex items-center gap-2">
-          <History className="w-5 h-5 text-[#D4A853]" />
+        <h1 className="text-lg font-medium text-fg-strong flex items-center gap-2">
+          <History className="w-5 h-5 text-accent" />
           Version History
         </h1>
-        <p className="text-xs text-[#8B949E] mt-0.5">All Current Report imports · restore any version as active</p>
+        <p className="text-xs text-fg-dim mt-0.5">All Current Report imports · restore any version as active</p>
       </div>
 
       {msg && (
         <div className={`flex items-center gap-2 text-sm p-3 rounded-lg border ${
           msg.type === 'ok'
-            ? 'bg-[#238636]/10 border-[#238636]/30 text-[#3FB950]'
-            : 'bg-[#DA3633]/10 border-[#DA3633]/30 text-[#F85149]'
+            ? 'bg-success/10 border-success/30 text-success-light'
+            : 'bg-danger-strong/10 border-danger-strong/30 text-danger'
         }`}>
           {msg.type === 'ok' ? <CheckCircle className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
           {msg.text}
@@ -60,9 +60,9 @@ export default function VersionsPage() {
         </div>
 
         {loading ? (
-          <div className="p-6 text-center text-xs text-[#8B949E]">Loading…</div>
+          <div className="p-6 text-center text-xs text-fg-dim">Loading…</div>
         ) : versions.length === 0 ? (
-          <div className="p-6 text-center text-xs text-[#8B949E]">
+          <div className="p-6 text-center text-xs text-fg-dim">
             No imports yet. Go to Import to upload your first Current Report.
           </div>
         ) : (
@@ -83,7 +83,7 @@ export default function VersionsPage() {
               <tbody>
                 {versions.map(v => (
                   <tr key={v.id}>
-                    <td className="text-[#C9D1D9] font-medium">{v.label}</td>
+                    <td className="text-fg font-medium">{v.label}</td>
                     <td className="font-mono text-[10px]">{v.filename}</td>
                     <td className="num">{v.loan_count ?? '—'}</td>
                     <td>{v.as_of_date ?? '—'}</td>

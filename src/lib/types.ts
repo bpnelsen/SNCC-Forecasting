@@ -84,11 +84,40 @@ export interface MonthlyBalance {
   land_bucket: number
   total_loans: number
   total_all: number
+  // Drawn/outstanding balance per segment: existing loans valued at
+  // loan_amount_disbursed (decays at maturity) + forecasted cohorts.
+  outstanding_sfr: number
+  outstanding_mfr: number
+  outstanding_and: number
+  outstanding_raw_land: number
+  outstanding_finished_lots: number
+  outstanding_hhh: number
   variance: number
   new_originations_sfr: number
   new_originations_mfr: number
   forecasted_sfr: number
   forecasted_mfr: number
+  // Forecasted (drawn) balance contributed by new-origination cohorts in the
+  // remaining product segments — added so the forecast page can filter by
+  // product type, not just SF + MF.
+  forecasted_and: number
+  forecasted_raw_land: number
+  forecasted_finished_lots: number
+  forecasted_hhh: number
+  // Outstanding balance contributed by ALL forecasted new-origination cohorts
+  // (every product type), not just SF + MF.
+  forecasted_total: number
+  // Per-segment new-origination count and dollar amount AT origination month
+  // (LB-driven + scheduled). Lets the forecast page filter the New Orig (#) /
+  // New Orig $ columns by product type.
+  new_origs_by_segment: {
+    sfr: { count: number; amount: number }
+    mfr: { count: number; amount: number }
+    and: { count: number; amount: number }
+    raw_land: { count: number; amount: number }
+    finished_lots: { count: number; amount: number }
+    hhh: { count: number; amount: number }
+  }
   yield_active: number
   yield_projected: number
   yield_land_bucket: number
@@ -110,6 +139,18 @@ export interface ForecastResult {
   as_of_date: string
   version_label: string
   total_active_loans: number
+  // Sum of loan_amount_disbursed (cash actually drawn/funded) across every
+  // loan in the active version, broken out by product type so the dashboard
+  // can respect the product-type filter. `total` = sum of all segments.
+  active_loans_outstanding: {
+    sfr: number
+    mfr: number
+    and: number
+    raw_land: number
+    finished_lots: number
+    hhh: number
+    total: number
+  }
   current_balances: {
     sfr: number
     mfr: number
@@ -120,6 +161,7 @@ export interface ForecastResult {
     total: number
   }
   land_bucket_schedules: LandBucketProjectSchedule[]
+  a_and_d_schedules: AAndDLoanSchedule[]
 }
 
 // ─── Modular assumption entities (from migration 002) ───────────────────────
@@ -157,6 +199,100 @@ export interface LandBucketProject {
   dev_end_date: string | null
   lot_sales_start_date: string | null
   vertical_loan_program_id: string | null
+  // Per-project override: dollar amount per vertical loan when a lot sells.
+  // NULL = use calculator default (lot_price × multiple).
+  vertical_loan_amount: number | null
+  // Optional manual lot-release override. Keys are YYYY-MM, values are the
+  // integer lots released that month. When non-empty, overrides absorption_rate.
+  lot_release_schedule: Record<string, number>
+  notes: string | null
+}
+
+// HHH / JV development project. Mirrors the meaningful Land Bucket fields but
+// is a distinct entity (not a loan, not a land bucket project). Its
+// balance_outstanding feeds the HHH/JV forecast segment.
+export interface HHHJVProject {
+  id: string
+  name: string
+  builder_id: string | null
+  total_lots: number
+  lot_price: number
+  absorption_rate: number | null
+  balance_outstanding: number
+  interest_rate: number
+  dev_start_date: string | null
+  dev_end_date: string | null
+  lot_sales_start_date: string | null
+  vertical_loan_program_id: string | null
+  vertical_loan_amount: number | null
+  notes: string | null
+}
+
+// A&D (Acquisition & Development) loan — distinct from imported A&D loans
+// and forecasted A&D cohorts. Models the full lifecycle: origination →
+// initial_balance, draw to peak (90% of total_loan_amount) over
+// draw_period_months, then lot releases pay it down. See migration 011.
+export interface AAndDLoan {
+  id: string
+  name: string
+  builder_id: string | null
+  initial_balance: number
+  total_loan_amount: number
+  total_lots: number
+  lot_release_premium_pct: number  // 110 = release_price 110% of prorata
+  interest_rate: number
+  origination_date: string | null
+  draw_period_months: number
+  release_start_date: string | null
+  release_period_months: number
+  draw_schedule: Record<string, number>     // { YYYY-MM: $ }
+  release_schedule: Record<string, number>  // { YYYY-MM: lots }
+  notes: string | null
+}
+
+export interface AAndDLoanMonth {
+  month: string
+  label: string
+  starting_balance: number
+  draw_this_month: number
+  lots_released: number
+  lots_released_cum: number
+  release_proceeds: number
+  ending_balance: number
+}
+
+export interface AAndDLoanSchedule {
+  loan_id: string
+  loan_name: string
+  builder_name: string | null
+  total_lots: number
+  total_loan_amount: number
+  months: AAndDLoanMonth[]
+}
+
+export interface NewOriginationEntry {  id: string
+  builder_id: string
+  land_bucket_project_id: string | null
+  // Free-text development name. When the user picks an existing project from
+  // the autocomplete, both this and land_bucket_project_id are populated.
+  development_name: string | null
+  // Series start month, 'YYYY-MM'.
+  month: string
+  // Per-month loans started when monthly_mode = 'fixed'.
+  loan_count: number
+  avg_loan_amount: number
+  loan_program_id: string | null
+  // Per-entry interest rate override (fraction, e.g. 0.0525). null = fall
+  // back to the entry's loan_program.default_rate at calc time.
+  interest_rate: number | null
+  // Cap on cumulative loans started by this entry. null / 0 = no cap.
+  total_lots: number | null
+  // Inclusive calendar stop, 'YYYY-MM'. null = no date stop.
+  end_month: string | null
+  // 'fixed' = loan_count every month; 'schedule' = monthly_schedule lookup.
+  monthly_mode: 'fixed' | 'schedule'
+  // { 'YYYY-MM': count } used when monthly_mode = 'schedule'.
+  monthly_schedule: Record<string, number>
   notes: string | null
 }
 
@@ -178,6 +314,10 @@ export interface LandBucketMonth {
   lots_sold_cumulative: number
   lots_remaining: number
   sale_proceeds: number
+  // Balance at the START of the month, before this month's sale activity.
+  // Month 0 = sum of project.balance_outstanding (the Land Bucket tab's
+  // "Grand total"); month i = previous month's ending_balance.
+  starting_balance: number
   ending_balance: number
   interest_income: number
   new_vertical_origs_count: number

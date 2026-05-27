@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 
+// Next 14 statically caches GET route handlers by default. Force-dynamic so
+// DB writes are reflected immediately on Vercel without a redeploy.
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   try {
     const sb = createServiceClient()
@@ -17,7 +21,7 @@ export async function GET() {
   }
 }
 
-export async function PUT(req: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const sb   = createServiceClient()

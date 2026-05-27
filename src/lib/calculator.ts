@@ -13,6 +13,9 @@ import {
   ForecastResult,
   NewOriginationEntry,
   HHHJVProject,
+  AAndDLoan,
+  AAndDLoanMonth,
+  AAndDLoanSchedule,
 } from './types'
 
 // Vertical loan amount = lot_price × this multiple. Quick default until the
@@ -243,6 +246,125 @@ function hhhJvBalanceForMonth(p: HHHJVProject, monthKey: string): number {
   return p.balance_outstanding > 0 ? p.balance_outstanding : 0
 }
 
+// ─── A&D loans ───────────────────────────────────────────────────────────────
+// Peak balance = 90% of total_loan_amount; the loan ramps from initial_balance
+// to peak over draw_period_months, then releases pay it down. Each release =
+// lots × (total_loan / total_lots) × premium%. See migration 011.
+const A_AND_D_PEAK_FRACTION = 0.9
+
+// Per-loan stateful projection over the forecast horizon. Returns the
+// full month-by-month schedule (used for the per-loan stacked chart) and
+// the totals contributor array (used by the main loop).
+function projectAAndDLoan(
+  loan: AAndDLoan,
+  builderName: string | null,
+  months: MonthSpec[],
+): { schedule: AAndDLoanSchedule; contributions: number[] } {
+  const monthsOut: AAndDLoanMonth[] = []
+  const contributions = new Array<number>(months.length).fill(0)
+
+  const origKey = loan.origination_date ? loan.origination_date.slice(0, 7) : null
+  const releaseKey = loan.release_start_date ? loan.release_start_date.slice(0, 7) : null
+  const peak = Math.max(loan.initial_balance, loan.total_loan_amount * A_AND_D_PEAK_FRACTION)
+  const totalDraws = Math.max(0, peak - loan.initial_balance)
+  const linearDraw = loan.draw_period_months > 0 ? totalDraws / loan.draw_period_months : 0
+  const lotReleasePrice = loan.total_lots > 0
+    ? (loan.total_loan_amount / loan.total_lots) * (loan.lot_release_premium_pct / 100)
+    : 0
+  const linearLotsPerMonth = loan.release_period_months > 0
+    ? loan.total_lots / loan.release_period_months
+    : 0
+
+  let balance = 0
+  let originated = false
+  let drawMonthsApplied = 0
+  let lotsReleased = 0
+  let lotsAcc = 0
+
+  for (let i = 0; i < months.length; i++) {
+    const monthKey = months[i].key
+
+    // Pre-origination: contributes nothing.
+    if (!origKey || monthKey < origKey) {
+      monthsOut.push({
+        month: monthKey,
+        label: months[i].label,
+        starting_balance: balance,
+        draw_this_month: 0,
+        lots_released: 0,
+        lots_released_cum: lotsReleased,
+        release_proceeds: 0,
+        ending_balance: balance,
+      })
+      contributions[i] = balance
+      continue
+    }
+
+    // First time we reach the origination month, the principal lands.
+    if (!originated) {
+      balance = loan.initial_balance
+      originated = true
+    }
+
+    const startingBalance = balance
+
+    // Draw phase: month between origination and release_start (or no release
+    // configured), still within the draw window.
+    let drawThisMonth = 0
+    const inDrawWindow = (!releaseKey || monthKey < releaseKey) && drawMonthsApplied < loan.draw_period_months
+    if (inDrawWindow) {
+      const override = Number(loan.draw_schedule?.[monthKey] ?? 0)
+      drawThisMonth = override > 0 ? override : linearDraw
+      balance = Math.min(peak, balance + drawThisMonth)
+      drawMonthsApplied += 1
+    }
+
+    // Release phase: at/after release_start_date, while lots remain.
+    let lotsThisMonth = 0
+    let proceeds = 0
+    if (releaseKey && monthKey >= releaseKey && lotsReleased < loan.total_lots) {
+      const override = loan.release_schedule?.[monthKey]
+      if (override != null) {
+        lotsThisMonth = Math.max(0, Math.floor(Number(override) || 0))
+      } else if (linearLotsPerMonth > 0) {
+        lotsAcc += linearLotsPerMonth
+        lotsThisMonth = Math.floor(lotsAcc)
+        lotsAcc -= lotsThisMonth
+      }
+      lotsThisMonth = Math.min(lotsThisMonth, loan.total_lots - lotsReleased)
+      lotsReleased += lotsThisMonth
+      proceeds = lotsThisMonth * lotReleasePrice
+      balance = Math.max(0, balance - proceeds)
+    }
+
+    monthsOut.push({
+      month: monthKey,
+      label: months[i].label,
+      starting_balance: startingBalance,
+      draw_this_month: drawThisMonth,
+      lots_released: lotsThisMonth,
+      lots_released_cum: lotsReleased,
+      release_proceeds: proceeds,
+      ending_balance: balance,
+    })
+    // Use starting_balance so month 0 of the forecast equals the as-of value
+    // (mirrors the Land Bucket starting-balance treatment).
+    contributions[i] = startingBalance
+  }
+
+  return {
+    schedule: {
+      loan_id: loan.id,
+      loan_name: loan.name,
+      builder_name: builderName,
+      total_lots: loan.total_lots,
+      total_loan_amount: loan.total_loan_amount,
+      months: monthsOut,
+    },
+    contributions,
+  }
+}
+
 // Lot-driven origination cohort balance at month index `m`.
 function lotOriginationBalance(orig: LotOrigination, m: number): number {
   const age = m - orig.origination_month_idx
@@ -260,6 +382,7 @@ export interface ForecastInput {
   loanPrograms: LoanProgram[]
   newOriginations: NewOriginationEntry[]
   hhhJvProjects: HHHJVProject[]
+  aAndDLoans: AAndDLoan[]
   settings: ForecastSettings
   versionLabel: string
   asOfDate: string
@@ -281,6 +404,20 @@ export function runForecast(input: ForecastInput): ForecastResult {
 
   const lb = runLandBucket(input.landBucketProjects, buildersById, programsById, months)
   const monthIndexByKey = new Map(months.map((m, i) => [m.key, i]))
+
+  // A&D planned loans: project each loan's lifecycle, keep per-month
+  // schedules for the /a-and-d projection card, and a totals array to add
+  // into the A&D segment in the main loop below.
+  const aAndDSchedules: AAndDLoanSchedule[] = []
+  const aAndDContribByMonth = new Array<number>(months.length).fill(0)
+  for (const loan of input.aAndDLoans) {
+    const builderName = loan.builder_id
+      ? buildersById.get(loan.builder_id)?.name ?? null
+      : null
+    const { schedule, contributions } = projectAAndDLoan(loan, builderName, months)
+    aAndDSchedules.push(schedule)
+    for (let i = 0; i < months.length; i++) aAndDContribByMonth[i] += contributions[i]
+  }
 
   // Expand each new-origination entry into a recurring series of monthly
   // cohorts that draws down a lot pool. The series starts at entry.month and
@@ -406,7 +543,10 @@ export function runForecast(input: ForecastInput): ForecastResult {
 
     const sfr = sfr_existing + newBySegment.sfr
     const mfr = mfr_existing + newBySegment.mfr
-    const and = and_existing + newBySegment.and
+    // Planned A&D loans (forward-modeled lifecycle) stack on top of imported
+    // A&D loans and forecasted A&D cohorts.
+    const aAndDPlanned = aAndDContribByMonth[i]
+    const and = and_existing + newBySegment.and + aAndDPlanned
     const raw_land = raw_existing + newBySegment.raw_land
     const finished_lots = fl_existing + newBySegment.finished_lots
     // HHH/JV projects feed the HHH/JV segment (balance == outstanding).
@@ -420,7 +560,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
       loans.reduce((s, l) => s + projectExistingLoanOutstanding(l, m.date), 0)
     const outstanding_sfr           = sumExistingOut(loansByType.SFR)           + newBySegment.sfr
     const outstanding_mfr           = sumExistingOut(loansByType.MFR)           + newBySegment.mfr
-    const outstanding_and           = sumExistingOut(loansByType['A&D'])        + newBySegment.and
+    const outstanding_and           = sumExistingOut(loansByType['A&D'])        + newBySegment.and + aAndDPlanned
     const outstanding_raw_land      = sumExistingOut(loansByType.RAW_LAND)      + newBySegment.raw_land
     const outstanding_finished_lots = sumExistingOut(loansByType.FINISHED_LOTS) + newBySegment.finished_lots
     const outstanding_hhh           = sumExistingOut(loansByType.HHH) +
@@ -551,5 +691,6 @@ export function runForecast(input: ForecastInput): ForecastResult {
       total: m0.total_all,
     },
     land_bucket_schedules: lb.schedules,
+    a_and_d_schedules: aAndDSchedules,
   }
 }

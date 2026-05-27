@@ -161,6 +161,7 @@ export interface ForecastResult {
     total: number
   }
   land_bucket_schedules: LandBucketProjectSchedule[]
+  a_and_d_schedules: AAndDLoanSchedule[]
 }
 
 // ─── Modular assumption entities (from migration 002) ───────────────────────
@@ -225,6 +226,48 @@ export interface HHHJVProject {
   vertical_loan_program_id: string | null
   vertical_loan_amount: number | null
   notes: string | null
+}
+
+// A&D (Acquisition & Development) loan — distinct from imported A&D loans
+// and forecasted A&D cohorts. Models the full lifecycle: origination →
+// initial_balance, draw to peak (90% of total_loan_amount) over
+// draw_period_months, then lot releases pay it down. See migration 011.
+export interface AAndDLoan {
+  id: string
+  name: string
+  builder_id: string | null
+  initial_balance: number
+  total_loan_amount: number
+  total_lots: number
+  lot_release_premium_pct: number  // 110 = release_price 110% of prorata
+  interest_rate: number
+  origination_date: string | null
+  draw_period_months: number
+  release_start_date: string | null
+  release_period_months: number
+  draw_schedule: Record<string, number>     // { YYYY-MM: $ }
+  release_schedule: Record<string, number>  // { YYYY-MM: lots }
+  notes: string | null
+}
+
+export interface AAndDLoanMonth {
+  month: string
+  label: string
+  starting_balance: number
+  draw_this_month: number
+  lots_released: number
+  lots_released_cum: number
+  release_proceeds: number
+  ending_balance: number
+}
+
+export interface AAndDLoanSchedule {
+  loan_id: string
+  loan_name: string
+  builder_name: string | null
+  total_lots: number
+  total_loan_amount: number
+  months: AAndDLoanMonth[]
 }
 
 export interface NewOriginationEntry {  id: string

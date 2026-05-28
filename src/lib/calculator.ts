@@ -419,6 +419,37 @@ export function runForecast(input: ForecastInput): ForecastResult {
     for (let i = 0; i < months.length; i++) aAndDContribByMonth[i] += contributions[i]
   }
 
+  // Imported A&D loans — flat-until-maturity, no draws/releases. Built here so
+  // the /a-and-d page can show them alongside planned loans. NOT added to
+  // aAndDContribByMonth — the existing `and_existing` already counts them.
+  const importedAAndDSchedules: AAndDLoanSchedule[] = input.loans
+    .filter(l => l.loan_type === 'A&D')
+    .map<AAndDLoanSchedule>(l => {
+      const monthsOut: AAndDLoanMonth[] = months.map(m => {
+        const bal = projectExistingLoanBalance(l, m.date, input.loanPrograms, startDate)
+        return {
+          month: m.key,
+          label: m.label,
+          starting_balance: bal,
+          draw_this_month: 0,
+          lots_released: 0,
+          lots_released_cum: 0,
+          release_proceeds: 0,
+          ending_balance: bal,
+        }
+      })
+      return {
+        loan_id: l.id ?? l.loan_number,
+        loan_name: l.loan_number || l.borrower || 'Imported A&D',
+        builder_name: null,
+        total_lots: 0,
+        total_loan_amount: Math.max(
+          l.projected_balance, l.current_loan_amount, l.loan_amount_disbursed,
+        ),
+        months: monthsOut,
+      }
+    })
+
   // Expand each new-origination entry into a recurring series of monthly
   // cohorts that draws down a lot pool. The series starts at entry.month and
   // originates loans every month (fixed loan_count, or monthly_schedule lookup)
@@ -692,5 +723,6 @@ export function runForecast(input: ForecastInput): ForecastResult {
     },
     land_bucket_schedules: lb.schedules,
     a_and_d_schedules: aAndDSchedules,
+    imported_a_and_d_schedules: importedAAndDSchedules,
   }
 }

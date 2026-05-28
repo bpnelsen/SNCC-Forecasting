@@ -178,6 +178,8 @@ export default function AAndDPage() {
         </div>
       </div>
 
+      <ImportedAAndDCard forecast={forecast} />
+
       {editing && (
         <LoanEditor
           form={editing}
@@ -494,12 +496,20 @@ function ProjectionCard({
   forecast: ForecastResult | null
   loanCount: number
 }) {
+  // One series per planned loan + a single aggregated 'Imported A&D' series
+  // so the chart stays readable even when there are many imported loans.
   const loanSeries = useMemo(() => {
     if (!forecast) return [] as { name: string; color: string }[]
     const names = [...forecast.a_and_d_schedules]
       .map(s => s.loan_name)
       .sort((a, b) => a.localeCompare(b))
-    return names.map((name, i) => ({ name, color: PROJECT_PALETTE[i % PROJECT_PALETTE.length] }))
+    const series = names.map((name, i) => ({
+      name, color: PROJECT_PALETTE[i % PROJECT_PALETTE.length],
+    }))
+    if (forecast.imported_a_and_d_schedules.length > 0) {
+      series.push({ name: 'Imported A&D', color: '#8B949E' })
+    }
+    return series
   }, [forecast])
 
   const chartData = useMemo(() => {
@@ -508,6 +518,13 @@ function ProjectionCard({
       const row: Record<string, number | string> = { label: m.label, month: m.month }
       for (const sch of forecast.a_and_d_schedules) {
         row[sch.loan_name] = sch.months[i]?.starting_balance ?? 0
+      }
+      if (forecast.imported_a_and_d_schedules.length > 0) {
+        let importedTotal = 0
+        for (const sch of forecast.imported_a_and_d_schedules) {
+          importedTotal += sch.months[i]?.starting_balance ?? 0
+        }
+        row['Imported A&D'] = importedTotal
       }
       return row
     })
@@ -529,6 +546,11 @@ function ProjectionCard({
         lotsCum         += row.lots_released_cum
         proceeds        += row.release_proceeds
       }
+      // Imported A&D loans contribute to the balance row only (no draws,
+      // releases, or lot accounting — they're treated flat until maturity).
+      for (const sch of forecast.imported_a_and_d_schedules) {
+        balance += sch.months[i]?.starting_balance ?? 0
+      }
       return {
         month: forecast.months[i].month,
         label: forecast.months[i].label,
@@ -537,7 +559,9 @@ function ProjectionCard({
     })
   }, [forecast])
 
-  if (!forecast || forecast.a_and_d_schedules.length === 0) {
+  const hasAnyData = forecast &&
+    (forecast.a_and_d_schedules.length > 0 || forecast.imported_a_and_d_schedules.length > 0)
+  if (!hasAnyData) {
     return (
       <div className="card fade-up fade-up-1.5 p-4">
         <div className="flex items-center gap-2 mb-1">
@@ -645,6 +669,55 @@ function Kpi({ label, value }: { label: string; value: string }) {
     <div>
       <div className="text-[10px] uppercase tracking-wide text-fg-dim mb-0.5">{label}</div>
       <div className="text-sm font-medium text-fg-strong font-mono">{value}</div>
+    </div>
+  )
+}
+
+// ─── Imported A&D loans (read-only) ─────────────────────────────────────────
+// Loans whose loan_type is 'A&D' on the active Current Report. The engine
+// continues to project them flat-until-maturity; this card just surfaces
+// them on the A&D tab for visibility next to the forward-planned loans.
+
+function ImportedAAndDCard({ forecast }: { forecast: ForecastResult | null }) {
+  if (!forecast || forecast.imported_a_and_d_schedules.length === 0) return null
+
+  const rows = [...forecast.imported_a_and_d_schedules]
+    .sort((a, b) => a.loan_name.localeCompare(b.loan_name))
+
+  return (
+    <div className="card fade-up fade-up-2">
+      <div className="card-header flex items-center justify-between">
+        <span className="card-title">Imported A&amp;D Loans · read-only</span>
+        <span className="text-[10px] text-fg-dim">
+          {rows.length} loan{rows.length === 1 ? '' : 's'} · loan_type = &lsquo;A&amp;D&rsquo; from the active Current Report
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Loan #</th>
+              <th className="text-right">Commitment</th>
+              <th className="text-right">Current Balance</th>
+              <th className="text-right">End of Horizon</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(s => {
+              const first = s.months[0]?.starting_balance ?? 0
+              const last  = s.months[s.months.length - 1]?.starting_balance ?? 0
+              return (
+                <tr key={s.loan_id}>
+                  <td className="text-fg font-mono text-[10px]">{s.loan_name}</td>
+                  <td className="num">{formatCurrency(s.total_loan_amount, true)}</td>
+                  <td className="num">{formatCurrency(first, true)}</td>
+                  <td className="num">{formatCurrency(last, true)}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

@@ -162,6 +162,10 @@ export interface ForecastResult {
   }
   land_bucket_schedules: LandBucketProjectSchedule[]
   a_and_d_schedules: AAndDLoanSchedule[]
+  // Imported A&D loans (loan_type === 'A&D' from the Current Report) projected
+  // flat-until-maturity. Surfaced so the A&D tab can show them alongside
+  // forward-planned A&D loans without changing how the engine values them.
+  imported_a_and_d_schedules: AAndDLoanSchedule[]
 }
 
 // ─── Modular assumption entities (from migration 002) ───────────────────────

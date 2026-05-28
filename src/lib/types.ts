@@ -272,6 +272,12 @@ export interface AAndDLoanSchedule {
   total_lots: number
   total_loan_amount: number
   months: AAndDLoanMonth[]
+  // Populated only for imported A&D loans (from the Current Report), so the
+  // /a-and-d Imported card can show borrower / maturity / current commitment
+  // without re-fetching the loans list.
+  imported_borrower?: string | null
+  imported_maturity_date?: string | null
+  imported_current_loan_amount?: number
 }
 
 export interface NewOriginationEntry {  id: string

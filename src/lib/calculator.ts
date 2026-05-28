@@ -447,6 +447,9 @@ export function runForecast(input: ForecastInput): ForecastResult {
           l.projected_balance, l.current_loan_amount, l.loan_amount_disbursed,
         ),
         months: monthsOut,
+        imported_borrower: l.borrower || null,
+        imported_maturity_date: l.current_loan_due_date,
+        imported_current_loan_amount: l.current_loan_amount,
       }
     })
 

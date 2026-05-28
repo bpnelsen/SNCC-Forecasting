@@ -697,7 +697,10 @@ function ImportedAAndDCard({ forecast }: { forecast: ForecastResult | null }) {
           <thead>
             <tr>
               <th>Loan #</th>
+              <th>Name</th>
+              <th>Maturity</th>
               <th className="text-right">Commitment</th>
+              <th className="text-right">Current Loan Amount</th>
               <th className="text-right">Current Balance</th>
               <th className="text-right">End of Horizon</th>
             </tr>
@@ -709,7 +712,10 @@ function ImportedAAndDCard({ forecast }: { forecast: ForecastResult | null }) {
               return (
                 <tr key={s.loan_id}>
                   <td className="text-fg font-mono text-[10px]">{s.loan_name}</td>
+                  <td className="text-fg">{s.imported_borrower || <span className="text-fg-dim">—</span>}</td>
+                  <td className="text-[10px] font-mono">{s.imported_maturity_date ?? '—'}</td>
                   <td className="num">{formatCurrency(s.total_loan_amount, true)}</td>
+                  <td className="num">{formatCurrency(s.imported_current_loan_amount ?? 0, true)}</td>
                   <td className="num">{formatCurrency(first, true)}</td>
                   <td className="num">{formatCurrency(last, true)}</td>
                 </tr>

@@ -47,11 +47,14 @@ export default function AAndDPage() {
   const load = async () => {
     setLoading(true)
     try {
+      // cache:'no-store' so the browser HTTP cache can't serve a pre-save
+      // snapshot after the user edits and we re-fetch — without it, Save can
+      // succeed in the DB yet the page still renders the original values.
       const [l, b, fc] = await Promise.all([
-        fetch('/api/a-and-d-loans').then(r => r.json()),
-        fetch('/api/builders').then(r => r.json()),
+        fetch('/api/a-and-d-loans', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/builders', { cache: 'no-store' }).then(r => r.json()),
         // Forecast is best-effort — a missing version shouldn't block edits.
-        fetch('/api/calculate').then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch('/api/calculate', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null),
       ])
       setLoans(Array.isArray(l) ? l : [])
       setBuilders(Array.isArray(b) ? b : [])

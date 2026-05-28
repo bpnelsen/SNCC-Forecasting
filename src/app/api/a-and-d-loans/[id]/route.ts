@@ -39,13 +39,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       updated_at:              new Date().toISOString(),
     }
 
-    const { error } = await sb
+    // Chaining .select().single() forces Supabase to return the updated row.
+    // If params.id didn't match anything we get a real error instead of a
+    // silent 0-row update that looks like a success.
+    const { data, error } = await sb
       .from('a_and_d_loans')
       .update(payload)
       .eq('id', params.id)
+      .select()
+      .single()
 
     if (error) throw error
-    return NextResponse.json({ ok: true })
+    return NextResponse.json(data)
   } catch (e) {
     return NextResponse.json({ error: errMessage(e) }, { status: 500 })
   }

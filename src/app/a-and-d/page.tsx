@@ -60,6 +60,20 @@ export default function AAndDPage() {
   }
   useEffect(() => { load() }, [])
 
+  // Always stringify API errors safely so we never render "[object Object]"
+  // if the API returns a non-string error payload.
+  async function readError(r: Response, fallback: string): Promise<string> {
+    const text = await r.text().catch(() => '')
+    let parsed: unknown = null
+    try { parsed = text ? JSON.parse(text) : null } catch { /* keep raw */ }
+    const err = (parsed && typeof parsed === 'object' && 'error' in parsed)
+      ? (parsed as { error: unknown }).error : null
+    if (typeof err === 'string' && err.trim()) return err
+    if (err && typeof err === 'object') return JSON.stringify(err)
+    if (text) return `${r.status} ${r.statusText || fallback}: ${text.slice(0, 300)}`
+    return `${r.status} ${r.statusText || fallback}`
+  }
+
   const save = async () => {
     if (!editing) return
     setBusy(true); setMsg(null)
@@ -71,7 +85,7 @@ export default function AAndDPage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editing),
       })
-      if (!res.ok) throw new Error((await res.json()).error || 'Save failed')
+      if (!res.ok) throw new Error(await readError(res, 'Save failed'))
       setMsg({ type: 'ok', text: editing.id ? 'Loan updated.' : 'Loan created.' })
       setEditing(null)
       await load()
@@ -85,7 +99,7 @@ export default function AAndDPage() {
     setBusy(true); setMsg(null)
     try {
       const res = await fetch(`/api/a-and-d-loans/${loan.id}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error((await res.json()).error || 'Delete failed')
+      if (!res.ok) throw new Error(await readError(res, 'Delete failed'))
       setMsg({ type: 'ok', text: `"${loan.name}" deleted.` })
       await load()
     } catch (e) {

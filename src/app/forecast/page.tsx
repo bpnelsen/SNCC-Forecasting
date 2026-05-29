@@ -186,6 +186,8 @@ export default function ForecastPage() {
                 <th className="text-right">Active Yield</th>
                 <th className="text-right">Proj. Yield</th>
                 <th className="text-right">LB Yield</th>
+                <th className="text-right">HHH/JV Yield</th>
+                <th className="text-right">A&amp;D Planned Yield</th>
                 <th className="text-right">Profit Sharing</th>
                 <th className="text-right">Total Income</th>
               </tr>
@@ -197,6 +199,8 @@ export default function ForecastPage() {
                   <td className="num">{formatCurrency(m.yield_active, true)}</td>
                   <td className="num">{formatCurrency(m.yield_projected, true)}</td>
                   <td className="num">{formatCurrency(m.yield_land_bucket, true)}</td>
+                  <td className="num">{formatCurrency(m.yield_hhh_jv ?? 0, true)}</td>
+                  <td className="num">{formatCurrency(m.yield_a_and_d_planned ?? 0, true)}</td>
                   <td className="num text-success-light">{formatCurrency(m.profit_sharing, true)}</td>
                   <td className="num font-medium text-accent">{formatCurrency(m.total_income, true)}</td>
                 </tr>

@@ -72,6 +72,10 @@ interface LotOrigination {
   project_id: string
   // Optional per-entry rate override (fraction). null = use program.default_rate.
   rate_override: number | null
+  // Builder that spawned this cohort (LB project's builder, or
+  // NewOriginationEntry.builder_id). Lets the parent filter attribute each
+  // cohort's balance to a parent via builder → parent_company_id.
+  builder_id: string | null
 }
 
 interface LandBucketRunResult {
@@ -156,6 +160,7 @@ function runLandBucket(
           program: verticalProgram,
           project_id: project.id,
           rate_override: null,
+          builder_id: project.builder_id,
         })
         newOrigsCount = lotsThisMonth
         newOrigsAmount = lotsThisMonth * amountPerLoan
@@ -514,6 +519,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
         program,
         project_id: entry.land_bucket_project_id ?? entry.id,
         rate_override: entry.interest_rate ?? null,
+        builder_id: entry.builder_id ?? null,
       })
     }
   }
@@ -562,6 +568,21 @@ export function runForecast(input: ForecastInput): ForecastResult {
   }
   const parentIdFor = (loan: Loan): string =>
     (loan.borrower && parentByBorrower.get(loan.borrower)) || UNASSIGNED_PARENT_KEY
+
+  // Builder → parent_company_id (migration 013) — used to attribute every
+  // builder-spawned entity (forecasted cohorts, Land Bucket starting balance,
+  // HHH/JV balance, A&D planned balance) to the right parent in by_parent.
+  const parentByBuilder = new Map<string, string>()
+  for (const b of input.builders) {
+    parentByBuilder.set(b.id, b.parent_company_id || UNASSIGNED_PARENT_KEY)
+  }
+  const parentIdForBuilder = (builderId: string | null | undefined): string =>
+    (builderId && parentByBuilder.get(builderId)) || UNASSIGNED_PARENT_KEY
+
+  // Precomputed lookups so the monthly loop doesn't repeatedly scan arrays.
+  const lbProjectBuilder = new Map<string, string | null>(
+    input.landBucketProjects.map(p => [p.id, p.builder_id]),
+  )
 
   // Per-segment loan groups per parent (computed once, reused every month).
   // For each parent we precompute Loan[] arrays per segment so the monthly
@@ -661,25 +682,93 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const outstanding_hhh           = sumExistingOut(loansByType.HHH) +
                                       sumExistingOut(loansByType.UNKNOWN) + newBySegment.hhh + hhhJv
 
-    // Existing-loan segment + outstanding breakdown by parent company. Only
-    // the borrower-attributed (imported) loans contribute — forecasted
-    // cohorts, Land Bucket, HHH/JV, A&D planned stay outside the parent
-    // filter per the design.
+    // Per-parent breakdown for the month. Splits into:
+    //   • imported-loan attribution (borrower → parent) for sfr/mfr/etc.
+    //     and outstanding_<seg>;
+    //   • builder-attribution (builder → parent) for forecasted cohorts,
+    //     LB starting balance, HHH/JV balance, A&D planned balance.
+    type SegBucket = Record<Segment, number>
+    const newSegBucket = (): SegBucket => ({
+      sfr: 0, mfr: 0, and: 0, raw_land: 0, finished_lots: 0, hhh: 0,
+    })
+    const fcstByParent = new Map<string, SegBucket>()
+    const lbByParent      = new Map<string, number>()
+    const hhhJvByParent   = new Map<string, number>()
+    const aAndDByParent   = new Map<string, number>()
+    const bumpFcst = (pid: string, seg: Segment, amount: number) => {
+      let bucket = fcstByParent.get(pid)
+      if (!bucket) { bucket = newSegBucket(); fcstByParent.set(pid, bucket) }
+      bucket[seg] += amount
+    }
+    const bump = (map: Map<string, number>, pid: string, amount: number) => {
+      if (amount === 0) return
+      map.set(pid, (map.get(pid) ?? 0) + amount)
+    }
+
+    for (const orig of allOriginations) {
+      const bal = lotOriginationBalance(orig, i)
+      if (bal === 0) continue
+      const seg = PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]
+      bumpFcst(parentIdForBuilder(orig.builder_id), seg, bal)
+    }
+    for (const sched of lb.schedules) {
+      const builderId = lbProjectBuilder.get(sched.project_id) ?? null
+      bump(lbByParent, parentIdForBuilder(builderId), sched.months[i]?.starting_balance ?? 0)
+    }
+    for (const project of input.hhhJvProjects) {
+      bump(hhhJvByParent, parentIdForBuilder(project.builder_id),
+           hhhJvBalanceForMonth(project, m.key))
+    }
+    for (let k = 0; k < aAndDSchedules.length; k++) {
+      const loan  = input.aAndDLoans[k]
+      const sched = aAndDSchedules[k]
+      bump(aAndDByParent, parentIdForBuilder(loan?.builder_id ?? null),
+           sched.months[i]?.starting_balance ?? 0)
+    }
+
+    // Union of every parent that contributed anything (loans OR builder-
+    // attributed). All known parents are already in loansByParent so the
+    // dropdown stays stable; unioning catches keys that only appear in
+    // builder-attributed maps (e.g. an LB project whose builder maps to a
+    // parent who has no imported loans of their own).
+    const allParents = new Set<string>(loansByParent.keys())
+    for (const k of fcstByParent.keys())   allParents.add(k)
+    for (const k of lbByParent.keys())     allParents.add(k)
+    for (const k of hhhJvByParent.keys())  allParents.add(k)
+    for (const k of aAndDByParent.keys())  allParents.add(k)
+
     const by_parent: Record<string, ByParentSegmentBalance> = {}
-    for (const [parentId, segs] of loansByParent) {
+    for (const parentId of allParents) {
+      const segs   = loansByParent.get(parentId) ?? null
+      const fcst   = fcstByParent.get(parentId)   ?? newSegBucket()
+      const lb_p   = lbByParent.get(parentId)     ?? 0
+      const hhh_p  = hhhJvByParent.get(parentId)  ?? 0
+      const aad_p  = aAndDByParent.get(parentId)  ?? 0
       by_parent[parentId] = {
-        sfr:           sumExisting(segs.sfr),
-        mfr:           sumExisting(segs.mfr),
-        and:           sumExisting(segs.and),
-        raw_land:      sumExisting(segs.raw_land),
-        finished_lots: sumExisting(segs.finished_lots),
-        hhh:           sumExisting(segs.hhh),
-        outstanding_sfr:           sumExistingOut(segs.sfr),
-        outstanding_mfr:           sumExistingOut(segs.mfr),
-        outstanding_and:           sumExistingOut(segs.and),
-        outstanding_raw_land:      sumExistingOut(segs.raw_land),
-        outstanding_finished_lots: sumExistingOut(segs.finished_lots),
-        outstanding_hhh:           sumExistingOut(segs.hhh),
+        sfr:           segs ? sumExisting(segs.sfr)           : 0,
+        mfr:           segs ? sumExisting(segs.mfr)           : 0,
+        and:           segs ? sumExisting(segs.and)           : 0,
+        raw_land:      segs ? sumExisting(segs.raw_land)      : 0,
+        finished_lots: segs ? sumExisting(segs.finished_lots) : 0,
+        hhh:           segs ? sumExisting(segs.hhh)           : 0,
+        // outstanding_<seg> rolls in the matching builder-attributed contributions
+        // so the Outstanding tile / Total Outstanding rows can sum per parent
+        // without consulting the forecasted / planned / hhh-jv maps separately.
+        outstanding_sfr:           (segs ? sumExistingOut(segs.sfr)           : 0) + fcst.sfr,
+        outstanding_mfr:           (segs ? sumExistingOut(segs.mfr)           : 0) + fcst.mfr,
+        outstanding_and:           (segs ? sumExistingOut(segs.and)           : 0) + fcst.and + aad_p,
+        outstanding_raw_land:      (segs ? sumExistingOut(segs.raw_land)      : 0) + fcst.raw_land,
+        outstanding_finished_lots: (segs ? sumExistingOut(segs.finished_lots) : 0) + fcst.finished_lots,
+        outstanding_hhh:           (segs ? sumExistingOut(segs.hhh)           : 0) + fcst.hhh + hhh_p,
+        forecasted_sfr:           fcst.sfr,
+        forecasted_mfr:           fcst.mfr,
+        forecasted_and:           fcst.and,
+        forecasted_raw_land:      fcst.raw_land,
+        forecasted_finished_lots: fcst.finished_lots,
+        forecasted_hhh:           fcst.hhh,
+        land_bucket:    lb_p,
+        hhh_jv_balance: hhh_p,
+        a_and_d_planned: aad_p,
       }
     }
 
@@ -703,7 +792,27 @@ export function runForecast(input: ForecastInput): ForecastResult {
       yield_projected += lotOriginationBalance(orig, i) * rate / 12
     }
     const yield_land_bucket = lb.totals[i].interest_income
+    // HHH/JV projects: while between dev_start_date and dev_end_date, they
+    // earn interest on balance_outstanding at the project's interest_rate.
+    let yield_hhh_jv = 0
+    for (const project of input.hhhJvProjects) {
+      const bal = hhhJvBalanceForMonth(project, m.key)
+      if (bal === 0) continue
+      yield_hhh_jv += bal * (project.interest_rate || 0) / 12
+    }
+    // A&D planned loans: per-loan starting balance × interest_rate ÷ 12. Use
+    // starting_balance to match the LB convention (interest charged on the
+    // month's opening balance, before draws/releases within the month).
+    let yield_a_and_d_planned = 0
+    for (let k = 0; k < aAndDSchedules.length; k++) {
+      const loan  = input.aAndDLoans[k]
+      const sched = aAndDSchedules[k]
+      const bal = sched.months[i]?.starting_balance ?? 0
+      if (bal === 0) continue
+      yield_a_and_d_planned += bal * (loan?.interest_rate || 0) / 12
+    }
     const total_income = yield_active + yield_projected + yield_land_bucket
+                       + yield_hhh_jv + yield_a_and_d_planned
     const annualized_yield_pct = total_all > 0 ? (total_income / total_all) * 12 : 0
 
     // Payoff detection: existing loan whose balance transitioned to 0
@@ -769,6 +878,8 @@ export function runForecast(input: ForecastInput): ForecastResult {
       yield_active,
       yield_projected,
       yield_land_bucket,
+      yield_hhh_jv,
+      yield_a_and_d_planned,
       profit_sharing: 0,
       total_income,
       annualized_yield_pct,

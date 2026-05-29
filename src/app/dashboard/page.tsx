@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { StatCard } from '@/components/ui/StatCard'
 import { TotalBalanceChart, PortfolioStackedChart, IncomeChart, VarianceChart } from '@/components/charts/PortfolioCharts'
 import { ForecastResult, MonthlyBalance } from '@/lib/types'
@@ -11,6 +12,19 @@ import { RefreshCw, AlertCircle, Filter, Building2, Check, ChevronDown } from 'l
 // company (no explicit override and no pattern hit). Kept in sync with
 // UNASSIGNED_PARENT_KEY in src/lib/calculator.ts.
 const UNASSIGNED_PARENT_KEY = '__none__'
+
+// Render the active version's as_of_date (YYYY-MM-DD from the engine) as
+// "May 14, 2026". Parsed manually so timezone shifts can't bump it by a day.
+function formatAsOf(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso)
+  if (!m) return iso
+  const [_, y, mo, d] = m
+  const months = ['January','February','March','April','May','June',
+                  'July','August','September','October','November','December']
+  const mi = Math.max(0, Math.min(11, Number(mo) - 1))
+  return `${months[mi]} ${Number(d)}, ${y}`
+}
 
 // The set of toggleable product/category buckets shown in the dashboard.
 // Land Bucket isn't a "product type" per se but it sits next to the loan
@@ -35,47 +49,58 @@ const CHIPS: FilterChip[] = [
 
 const ALL_KEYS = new Set<FilterKey>(CHIPS.map(c => c.key))
 
-// Zero out segments not in `active`, then recompute total_loans, total_all,
-// and variance month-over-month from the filtered values. The calculator's
-// other per-month fields (income, yields) are kept as-is — filtering is a
-// presentation-layer slice of balances, not a re-run of the engine.
-// Per-segment imported-loan totals limited to the selected parent companies.
-// Returns the global value when no parent filter is active so the caller can
-// blindly use the result. selectedParents === null = no filter; an empty set
-// would correctly return zero (the user explicitly deselected everything).
-function existingByParent(
+// Slice a single segment by the active chip + selected parents. When the
+// parent filter is on, both the existing (imported by borrower→parent) and
+// the builder-attributed (forecasted cohorts + HHH/JV + A&D planned)
+// portions come from m.by_parent so every contribution honors the same
+// selection. The non-filtered branch reads m.<seg> / m.outstanding_<seg>
+// directly — those already fold in HHH/JV and A&D planned at the engine
+// level, so leaving them as-is keeps unfiltered numbers identical.
+type SegKey = 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh'
+function sliceSegment(
   m: MonthlyBalance,
-  seg: 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh',
+  seg: SegKey,
   selectedParents: Set<string> | null,
-): { existing: number; outstanding: number } {
+): { existing: number; forecasted: number; outstanding: number } {
   if (selectedParents === null) {
-    // Existing = full segment minus forecasted (forecasted gets re-added by
-    // the chip logic). For 'and' / 'raw_land' / 'finished_lots' / 'hhh' we
-    // don't expose forecasted_<seg> separately, so we substitute 0.
-    const fcst = seg === 'sfr' ? m.forecasted_sfr
-              : seg === 'mfr' ? m.forecasted_mfr
-              : 0
+    const fcst = m[`forecasted_${seg}` as const]
     return {
       existing:    m[seg] - fcst,
+      forecasted:  fcst,
       outstanding: m[`outstanding_${seg}` as const],
     }
   }
-  let existing = 0
-  let outstanding = 0
+  let existing = 0, forecasted = 0, outstanding = 0
   for (const pid of selectedParents) {
     const slot = m.by_parent[pid]
     if (!slot) continue
     existing    += slot[seg]
+    forecasted  += slot[`forecasted_${seg}` as const]
     outstanding += slot[`outstanding_${seg}` as const]
+    // hhh segment also carries HHH/JV project balances; and segment carries
+    // forward-planned A&D loan balances. The engine adds these into m.<seg>
+    // and m.outstanding_<seg> globally — the per-parent slice has to do
+    // the same so totals are consistent across filter states.
+    if (seg === 'hhh') forecasted += slot.hhh_jv_balance
+    if (seg === 'and') forecasted += slot.a_and_d_planned
   }
-  return { existing, outstanding }
+  return { existing, forecasted, outstanding }
+}
+
+// Land Bucket honors the same parent selection now that builders carry a
+// parent_company_id (migration 013).
+function sliceLandBucket(m: MonthlyBalance, selectedParents: Set<string> | null): number {
+  if (selectedParents === null) return m.land_bucket
+  let total = 0
+  for (const pid of selectedParents) total += m.by_parent[pid]?.land_bucket ?? 0
+  return total
 }
 
 // Zero out segments not in `active`, then recompute total_loans, total_all,
-// and variance month-over-month. When `selectedParents` is non-null the
-// existing-loan portion of each segment is swapped for the per-parent
-// aggregate; forecasted cohorts / Land Bucket / etc. are unaffected because
-// the parent filter is borrower-scoped only.
+// and variance month-over-month. When `selectedParents` is non-null both
+// existing AND builder-attributed portions of each segment come from the
+// per-parent aggregates so Land Bucket + forecasted + HHH/JV + A&D planned
+// all honor the parent filter.
 function applyFilter(
   months: MonthlyBalance[],
   active: Set<FilterKey>,
@@ -83,20 +108,19 @@ function applyFilter(
 ): MonthlyBalance[] {
   let prev = 0
   return months.map((m, i) => {
-    const slice = (seg: 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh',
-                   chip: FilterKey,
-                   forecastedFull: number) => {
+    const slice = (seg: SegKey, chip: FilterKey) => {
       if (!active.has(chip)) return { combined: 0, fcst: 0, outstanding: 0 }
-      const { existing, outstanding } = existingByParent(m, seg, selectedParents)
-      return { combined: existing + forecastedFull, fcst: forecastedFull, outstanding }
+      const { existing, forecasted, outstanding } = sliceSegment(m, seg, selectedParents)
+      return { combined: existing + forecasted, fcst: forecasted, outstanding }
     }
 
-    const sSfr = slice('sfr',           'sfr',           m.forecasted_sfr)
-    const sMfr = slice('mfr',           'mfr',           m.forecasted_mfr)
-    const sAnd = slice('and',           'and',           0)
-    const sRaw = slice('raw_land',      'raw_land',      0)
-    const sFin = slice('finished_lots', 'finished_lots', 0)
-    const sHhh = slice('hhh',           'hhh',           0)
+    const sSfr = slice('sfr',           'sfr')
+    const sMfr = slice('mfr',           'mfr')
+    const sAnd = slice('and',           'and')
+    const sRaw = slice('raw_land',      'raw_land')
+    const sFin = slice('finished_lots', 'finished_lots')
+    const sHhh = slice('hhh',           'hhh')
+    const lb   = active.has('land_bucket') ? sliceLandBucket(m, selectedParents) : 0
 
     const filtered: MonthlyBalance = {
       ...m,
@@ -106,10 +130,7 @@ function applyFilter(
       raw_land:      sRaw.combined,
       finished_lots: sFin.combined,
       hhh:           sHhh.combined,
-      land_bucket:   active.has('land_bucket') ? m.land_bucket : 0,
-      // Forecasted (new-origination) portion follows its parent segment's
-      // chip so the split Forecasted rows zero out alongside SFR / MFR.
-      // Parent filter doesn't touch forecasted (borrower-only scope).
+      land_bucket:   lb,
       forecasted_sfr: sSfr.fcst,
       forecasted_mfr: sMfr.fcst,
       outstanding_sfr:           sSfr.outstanding,
@@ -206,7 +227,7 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-lg font-medium text-fg-strong">Portfolio Dashboard</h1>
           <p className="text-xs text-fg-dim mt-0.5">
-            {data.version_label} · {data.total_active_loans} active loans · As of {data.as_of_date}
+            {data.version_label} · {data.total_active_loans} active loans · As of {formatAsOf(data.as_of_date)}
           </p>
         </div>
         <button onClick={load} className="btn-ghost flex items-center gap-1.5">
@@ -241,8 +262,8 @@ export default function DashboardPage() {
         })}
         <div className="flex items-center gap-1 ml-auto">
           <ParentCompanyDropdown
-            parents={data.parent_companies}
-            parentLoanCounts={data.parent_loan_counts}
+            parents={data.parent_companies ?? []}
+            parentLoanCounts={data.parent_loan_counts ?? {}}
             selected={selectedParents}
             onChange={setSelectedParents}
           />
@@ -436,20 +457,47 @@ function ParentCompanyDropdown({
   selected: Set<string> | null
   onChange: (s: Set<string> | null) => void
 }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const [open, setOpen]       = useState(false)
+  // Position is computed from the button's getBoundingClientRect on open
+  // (and on scroll/resize while open) and the popover renders via portal
+  // into document.body, so it can never be clipped by a parent .card's
+  // overflow-hidden or buried under sibling cards' stacking contexts.
+  const [pos, setPos]         = useState<{ top: number; right: number } | null>(null)
+  const buttonRef             = useRef<HTMLButtonElement>(null)
+  const popoverRef            = useRef<HTMLDivElement>(null)
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+
+  const reposition = () => {
+    const rect = buttonRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setPos({
+      top:   Math.round(rect.bottom + 4),
+      right: Math.round(window.innerWidth - rect.right),
+    })
+  }
 
   useEffect(() => {
     if (!open) return
+    reposition()
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (buttonRef.current?.contains(t)) return
+      if (popoverRef.current?.contains(t)) return
+      setOpen(false)
     }
-    const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    const onEsc      = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    const onResize   = () => reposition()
+    const onScroll   = () => reposition()
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onEsc)
+    window.addEventListener('resize', onResize)
+    window.addEventListener('scroll',  onScroll, true)  // capture = catch inner scrollers too
     return () => {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onEsc)
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('scroll',  onScroll, true)
     }
   }, [open])
 
@@ -480,50 +528,64 @@ function ParentCompanyDropdown({
   const selectAll = () => onChange(null)
   const selectNone = () => onChange(new Set())
 
+  const popover = open && pos && mounted ? createPortal(
+    <div ref={popoverRef}
+         style={{ position: 'fixed', top: pos.top, right: pos.right, zIndex: 1000 }}
+         className="w-64 bg-surface border border-border-strong rounded-lg shadow-xl max-h-80 overflow-y-auto">
+      <div className="px-2 py-1.5 border-b border-border flex items-center justify-between text-[10px] text-fg-dim">
+        <span>Parent companies</span>
+        <div className="flex items-center gap-1">
+          <button onClick={selectAll}  className="btn-ghost text-[10px] px-1.5 py-0.5">All</button>
+          <button onClick={selectNone} className="btn-ghost text-[10px] px-1.5 py-0.5">None</button>
+        </div>
+      </div>
+      {rows.length === 1 && rows[0].id === UNASSIGNED_PARENT_KEY ? (
+        <div className="text-[10px] text-fg-dim italic px-3 py-3 space-y-1.5">
+          <div>The forecast engine returned 0 parent companies.</div>
+          <div>
+            If you already added some on Assumptions, this almost always means
+            the deployed <code>/api/calculate</code> hasn&rsquo;t been refreshed.
+            Try: <strong>hard-refresh</strong> (⌘⇧R / Ctrl⇧R) or check{' '}
+            <a className="underline" href="/api/calculate" target="_blank" rel="noreferrer">
+              /api/calculate
+            </a>{' '}
+            for a <code>parent_companies</code> array.
+          </div>
+        </div>
+      ) : rows.map(r => {
+        const on = selected === null ? true : selected.has(r.id)
+        return (
+          <button key={r.id}
+                  onClick={() => toggle(r.id)}
+                  className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs
+                             hover:bg-border/50 text-left">
+            <span className="flex items-center gap-2">
+              <span className={`w-3.5 h-3.5 inline-flex items-center justify-center rounded border
+                                ${on ? 'bg-accent border-accent text-accent-on' : 'border-border-strong'}`}>
+                {on && <Check className="w-2.5 h-2.5" />}
+              </span>
+              <span className={r.id === UNASSIGNED_PARENT_KEY ? 'text-fg-dim italic' : 'text-fg'}>
+                {r.name}
+              </span>
+            </span>
+            <span className="text-[10px] text-fg-dim font-mono">{r.count}</span>
+          </button>
+        )
+      })}
+    </div>,
+    document.body,
+  ) : null
+
   return (
-    <div className="relative" ref={ref}>
-      <button onClick={() => setOpen(o => !o)}
+    <>
+      <button ref={buttonRef} onClick={() => setOpen(o => !o)}
               className="btn-ghost text-[10px] inline-flex items-center gap-1.5">
         <Building2 className="w-3 h-3" />
         {label}
         <ChevronDown className="w-3 h-3" />
       </button>
-      {open && (
-        <div className="absolute right-0 mt-1 w-64 bg-surface border border-border-strong rounded-lg shadow-xl z-30 max-h-80 overflow-y-auto">
-          <div className="px-2 py-1.5 border-b border-border flex items-center justify-between text-[10px] text-fg-dim">
-            <span>Parent companies</span>
-            <div className="flex items-center gap-1">
-              <button onClick={selectAll}  className="btn-ghost text-[10px] px-1.5 py-0.5">All</button>
-              <button onClick={selectNone} className="btn-ghost text-[10px] px-1.5 py-0.5">None</button>
-            </div>
-          </div>
-          {rows.length === 1 && rows[0].id === UNASSIGNED_PARENT_KEY ? (
-            <div className="text-[10px] text-fg-dim italic px-3 py-3">
-              No parent companies yet — add one on the Assumptions tab.
-            </div>
-          ) : rows.map(r => {
-            const on = selected === null ? true : selected.has(r.id)
-            return (
-              <button key={r.id}
-                      onClick={() => toggle(r.id)}
-                      className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs
-                                 hover:bg-border/50 text-left">
-                <span className="flex items-center gap-2">
-                  <span className={`w-3.5 h-3.5 inline-flex items-center justify-center rounded border
-                                    ${on ? 'bg-accent border-accent text-accent-on' : 'border-border-strong'}`}>
-                    {on && <Check className="w-2.5 h-2.5" />}
-                  </span>
-                  <span className={r.id === UNASSIGNED_PARENT_KEY ? 'text-fg-dim italic' : 'text-fg'}>
-                    {r.name}
-                  </span>
-                </span>
-                <span className="text-[10px] text-fg-dim font-mono">{r.count}</span>
-              </button>
-            )
-          })}
-        </div>
-      )}
-    </div>
+      {popover}
+    </>
   )
 }
 

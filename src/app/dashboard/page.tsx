@@ -36,47 +36,49 @@ const CHIPS: FilterChip[] = [
 
 const ALL_KEYS = new Set<FilterKey>(CHIPS.map(c => c.key))
 
-// Zero out segments not in `active`, then recompute total_loans, total_all,
-// and variance month-over-month from the filtered values. The calculator's
-// other per-month fields (income, yields) are kept as-is — filtering is a
-// presentation-layer slice of balances, not a re-run of the engine.
-// Per-segment imported-loan totals limited to the selected parent companies.
-// Returns the global value when no parent filter is active so the caller can
-// blindly use the result. selectedParents === null = no filter; an empty set
-// would correctly return zero (the user explicitly deselected everything).
-function existingByParent(
+// Slice a single segment by the active chip + selected parents. When the
+// parent filter is on, both the existing (imported by borrower→parent) and
+// the forecasted (builder→parent) portions come from m.by_parent so every
+// builder-attributed contribution honors the same selection.
+type SegKey = 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh'
+function sliceSegment(
   m: MonthlyBalance,
-  seg: 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh',
+  seg: SegKey,
   selectedParents: Set<string> | null,
-): { existing: number; outstanding: number } {
+): { existing: number; forecasted: number; outstanding: number } {
   if (selectedParents === null) {
-    // Existing = full segment minus forecasted (forecasted gets re-added by
-    // the chip logic). For 'and' / 'raw_land' / 'finished_lots' / 'hhh' we
-    // don't expose forecasted_<seg> separately, so we substitute 0.
-    const fcst = seg === 'sfr' ? m.forecasted_sfr
-              : seg === 'mfr' ? m.forecasted_mfr
-              : 0
+    const fcst = m[`forecasted_${seg}` as const]
     return {
       existing:    m[seg] - fcst,
+      forecasted:  fcst,
       outstanding: m[`outstanding_${seg}` as const],
     }
   }
-  let existing = 0
-  let outstanding = 0
+  let existing = 0, forecasted = 0, outstanding = 0
   for (const pid of selectedParents) {
     const slot = m.by_parent[pid]
     if (!slot) continue
     existing    += slot[seg]
+    forecasted  += slot[`forecasted_${seg}` as const]
     outstanding += slot[`outstanding_${seg}` as const]
   }
-  return { existing, outstanding }
+  return { existing, forecasted, outstanding }
+}
+
+// Land Bucket honors the same parent selection now that builders carry a
+// parent_company_id (migration 013).
+function sliceLandBucket(m: MonthlyBalance, selectedParents: Set<string> | null): number {
+  if (selectedParents === null) return m.land_bucket
+  let total = 0
+  for (const pid of selectedParents) total += m.by_parent[pid]?.land_bucket ?? 0
+  return total
 }
 
 // Zero out segments not in `active`, then recompute total_loans, total_all,
-// and variance month-over-month. When `selectedParents` is non-null the
-// existing-loan portion of each segment is swapped for the per-parent
-// aggregate; forecasted cohorts / Land Bucket / etc. are unaffected because
-// the parent filter is borrower-scoped only.
+// and variance month-over-month. When `selectedParents` is non-null both
+// existing AND builder-attributed portions of each segment come from the
+// per-parent aggregates so Land Bucket + forecasted + HHH/JV + A&D planned
+// all honor the parent filter.
 function applyFilter(
   months: MonthlyBalance[],
   active: Set<FilterKey>,
@@ -84,20 +86,19 @@ function applyFilter(
 ): MonthlyBalance[] {
   let prev = 0
   return months.map((m, i) => {
-    const slice = (seg: 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh',
-                   chip: FilterKey,
-                   forecastedFull: number) => {
+    const slice = (seg: SegKey, chip: FilterKey) => {
       if (!active.has(chip)) return { combined: 0, fcst: 0, outstanding: 0 }
-      const { existing, outstanding } = existingByParent(m, seg, selectedParents)
-      return { combined: existing + forecastedFull, fcst: forecastedFull, outstanding }
+      const { existing, forecasted, outstanding } = sliceSegment(m, seg, selectedParents)
+      return { combined: existing + forecasted, fcst: forecasted, outstanding }
     }
 
-    const sSfr = slice('sfr',           'sfr',           m.forecasted_sfr)
-    const sMfr = slice('mfr',           'mfr',           m.forecasted_mfr)
-    const sAnd = slice('and',           'and',           0)
-    const sRaw = slice('raw_land',      'raw_land',      0)
-    const sFin = slice('finished_lots', 'finished_lots', 0)
-    const sHhh = slice('hhh',           'hhh',           0)
+    const sSfr = slice('sfr',           'sfr')
+    const sMfr = slice('mfr',           'mfr')
+    const sAnd = slice('and',           'and')
+    const sRaw = slice('raw_land',      'raw_land')
+    const sFin = slice('finished_lots', 'finished_lots')
+    const sHhh = slice('hhh',           'hhh')
+    const lb   = active.has('land_bucket') ? sliceLandBucket(m, selectedParents) : 0
 
     const filtered: MonthlyBalance = {
       ...m,
@@ -107,10 +108,7 @@ function applyFilter(
       raw_land:      sRaw.combined,
       finished_lots: sFin.combined,
       hhh:           sHhh.combined,
-      land_bucket:   active.has('land_bucket') ? m.land_bucket : 0,
-      // Forecasted (new-origination) portion follows its parent segment's
-      // chip so the split Forecasted rows zero out alongside SFR / MFR.
-      // Parent filter doesn't touch forecasted (borrower-only scope).
+      land_bucket:   lb,
       forecasted_sfr: sSfr.fcst,
       forecasted_mfr: sMfr.fcst,
       outstanding_sfr:           sSfr.outstanding,

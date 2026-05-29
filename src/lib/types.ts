@@ -97,9 +97,31 @@ export interface MonthlyBalance {
   new_originations_mfr: number
   forecasted_sfr: number
   forecasted_mfr: number
+  // Forecasted (drawn) balance contributed by new-origination cohorts in the
+  // remaining product segments — added so the forecast page can filter by
+  // product type, not just SF + MF.
+  forecasted_and: number
+  forecasted_raw_land: number
+  forecasted_finished_lots: number
+  forecasted_hhh: number
   // Outstanding balance contributed by ALL forecasted new-origination cohorts
   // (every product type), not just SF + MF.
   forecasted_total: number
+  // Per-segment new-origination count and dollar amount AT origination month
+  // (LB-driven + scheduled). Lets the forecast page filter the New Orig (#) /
+  // New Orig $ columns by product type.
+  new_origs_by_segment: {
+    sfr: { count: number; amount: number }
+    mfr: { count: number; amount: number }
+    and: { count: number; amount: number }
+    raw_land: { count: number; amount: number }
+    finished_lots: { count: number; amount: number }
+    hhh: { count: number; amount: number }
+  }
+  // Existing-loan segments split by parent company so the dashboard can
+  // multi-select-filter without re-running the engine. Key '__none__' holds
+  // loans whose borrower didn't match any parent.
+  by_parent: Record<string, ByParentSegmentBalance>
   yield_active: number
   yield_projected: number
   yield_land_bucket: number
@@ -143,6 +165,15 @@ export interface ForecastResult {
     total: number
   }
   land_bucket_schedules: LandBucketProjectSchedule[]
+  a_and_d_schedules: AAndDLoanSchedule[]
+  // Parent companies known to the engine + how many loans rolled under each.
+  // '__none__' = unassigned. The dashboard renders the dropdown from these.
+  parent_companies: Array<{ id: string; name: string }>
+  parent_loan_counts: Record<string, number>
+  // Imported A&D loans (loan_type === 'A&D' from the Current Report) projected
+  // flat-until-maturity. Surfaced so the A&D tab can show them alongside
+  // forward-planned A&D loans without changing how the engine values them.
+  imported_a_and_d_schedules: AAndDLoanSchedule[]
 }
 
 // ─── Modular assumption entities (from migration 002) ───────────────────────
@@ -209,6 +240,88 @@ export interface HHHJVProject {
   notes: string | null
 }
 
+// A&D (Acquisition & Development) loan — distinct from imported A&D loans
+// and forecasted A&D cohorts. Models the full lifecycle: origination →
+// initial_balance, draw to peak (90% of total_loan_amount) over
+// draw_period_months, then lot releases pay it down. See migration 011.
+// Parent Company groups borrowers across loans so the dashboard can slice
+// imported-loan metrics by parent. See migration 012.
+export interface ParentCompany {
+  id: string
+  name: string
+  notes: string | null
+}
+export interface ParentCompanyPattern {
+  id: string
+  parent_company_id: string
+  pattern: string
+}
+export interface BorrowerParentMapping {
+  borrower: string
+  parent_company_id: string
+}
+// Per-segment imported-loan balance for a single parent company in one month.
+// Forecasted cohorts, Land Bucket, HHH/JV, A&D planned are not included here
+// (the parent filter is borrowers-only per the design).
+export interface ByParentSegmentBalance {
+  sfr: number
+  mfr: number
+  and: number
+  raw_land: number
+  finished_lots: number
+  hhh: number
+  outstanding_sfr: number
+  outstanding_mfr: number
+  outstanding_and: number
+  outstanding_raw_land: number
+  outstanding_finished_lots: number
+  outstanding_hhh: number
+}
+
+export interface AAndDLoan {
+  id: string
+  name: string
+  builder_id: string | null
+  initial_balance: number
+  total_loan_amount: number
+  total_lots: number
+  lot_release_premium_pct: number  // 110 = release_price 110% of prorata
+  interest_rate: number
+  origination_date: string | null
+  draw_period_months: number
+  release_start_date: string | null
+  release_period_months: number
+  draw_schedule: Record<string, number>     // { YYYY-MM: $ }
+  release_schedule: Record<string, number>  // { YYYY-MM: lots }
+  notes: string | null
+}
+
+export interface AAndDLoanMonth {
+  month: string
+  label: string
+  starting_balance: number
+  draw_this_month: number
+  lots_released: number
+  lots_released_cum: number
+  release_proceeds: number
+  ending_balance: number
+}
+
+export interface AAndDLoanSchedule {
+  loan_id: string
+  loan_name: string
+  builder_name: string | null
+  total_lots: number
+  total_loan_amount: number
+  months: AAndDLoanMonth[]
+  // Populated only for imported A&D loans (from the Current Report), so the
+  // /a-and-d Imported card can show borrower / maturity / current commitment
+  // without re-fetching the loans list.
+  imported_borrower?: string | null
+  imported_maturity_date?: string | null
+  imported_current_loan_amount?: number
+}
+
 export interface NewOriginationEntry {  id: string
   builder_id: string
   land_bucket_project_id: string | null
@@ -253,6 +366,10 @@ export interface LandBucketMonth {
   lots_sold_cumulative: number
   lots_remaining: number
   sale_proceeds: number
+  // Balance at the START of the month, before this month's sale activity.
+  // Month 0 = sum of project.balance_outstanding (the Land Bucket tab's
+  // "Grand total"); month i = previous month's ending_balance.
+  starting_balance: number
   ending_balance: number
   interest_income: number
   new_vertical_origs_count: number

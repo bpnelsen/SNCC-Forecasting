@@ -9,7 +9,15 @@ import {
   ForecastSettings,
   NewOriginationEntry,
   HHHJVProject,
+  AAndDLoan,
+  ParentCompany,
+  ParentCompanyPattern,
+  BorrowerParentMapping,
 } from '@/lib/types'
+
+// Next 14 statically caches GET route handlers by default. Force-dynamic so
+// the forecast always reflects the current active version, originations, etc.
+export const dynamic = 'force-dynamic'
 
 export async function GET() {
   try {
@@ -69,13 +77,17 @@ export async function GET() {
       }, { status: 500 })
     }
 
-    const [loansRes, buildersRes, programsRes, projectsRes, origsRes, hhhJvRes] = await Promise.all([
+    const [loansRes, buildersRes, programsRes, projectsRes, origsRes, hhhJvRes, aAndDRes, parentsRes, patternsRes, mappingsRes] = await Promise.all([
       sb.from('loans').select('*').eq('version_id', version.id),
       sb.from('builders').select('*'),
       sb.from('loan_programs').select('*'),
       sb.from('land_bucket_projects').select('*'),
       sb.from('new_origination_schedule').select('*'),
       sb.from('hhh_jv_projects').select('*'),
+      sb.from('a_and_d_loans').select('*'),
+      sb.from('parent_companies').select('*'),
+      sb.from('parent_company_patterns').select('*'),
+      sb.from('borrower_parent_mapping').select('*'),
     ])
 
     if (loansRes.error)    throw loansRes.error
@@ -91,6 +103,20 @@ export async function GET() {
     const hhhJvProjects: HHHJVProject[] = hhhJvRes.error
       ? []
       : ((hhhJvRes.data ?? []) as HHHJVProject[])
+    // Same graceful fallback for a_and_d_loans (migration 011).
+    const aAndDLoans: AAndDLoan[] = aAndDRes.error
+      ? []
+      : ((aAndDRes.data ?? []) as AAndDLoan[])
+    // Parent-company tables (migration 012) — same graceful empty fallback.
+    const parentCompanies: ParentCompany[] = parentsRes.error
+      ? []
+      : ((parentsRes.data ?? []) as ParentCompany[])
+    const parentCompanyPatterns: ParentCompanyPattern[] = patternsRes.error
+      ? []
+      : ((patternsRes.data ?? []) as ParentCompanyPattern[])
+    const borrowerParentMappings: BorrowerParentMapping[] = mappingsRes.error
+      ? []
+      : ((mappingsRes.data ?? []) as BorrowerParentMapping[])
 
     const result = runForecast({
       loans:               (loansRes.data    ?? []) as Loan[],
@@ -99,6 +125,10 @@ export async function GET() {
       landBucketProjects:  (projectsRes.data ?? []) as LandBucketProject[],
       newOriginations,
       hhhJvProjects,
+      aAndDLoans,
+      parentCompanies,
+      parentCompanyPatterns,
+      borrowerParentMappings,
       settings:            settings as ForecastSettings,
       versionLabel:        version.label,
       asOfDate:            version.as_of_date || new Date().toISOString().split('T')[0],

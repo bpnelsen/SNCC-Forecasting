@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Assumptions, LoanProgram } from '@/lib/types'
 import { Settings2, Save, AlertCircle, CheckCircle } from 'lucide-react'
+import { ParentCompaniesSection } from '@/components/assumptions/ParentCompaniesSection'
 
 export default function AssumptionsPage() {
   const [data, setData]       = useState<Assumptions | null>(null)
@@ -129,6 +130,8 @@ export default function AssumptionsPage() {
 
           To plan new starts: New Originations tab → New Entry. */}
 
+      <ParentCompaniesSection />
+
       {/* Loan Programs — single source of truth for new-origination rates,
           terms and draw curves. Mirrored in the New Originations tab. */}
       <Section title="Loan Programs · source of truth for rates &amp; draw curves">
@@ -145,7 +148,14 @@ export default function AssumptionsPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            {programs.map(p => (
+            {/* MFR Construction and SFR Construction are hidden here on
+                purpose — SFR/MFR cohorts are modeled only through manual New
+                Originations entries. The rows still exist in loan_programs and
+                feed the engine where referenced by data (e.g. land bucket
+                projects, builder defaults). */}
+            {programs
+              .filter(p => p.name !== 'MFR Construction' && p.name !== 'SFR Construction')
+              .map(p => (
               <div key={p.id} className="border border-border-strong rounded-lg p-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <div>

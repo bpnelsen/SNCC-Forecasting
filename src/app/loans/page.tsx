@@ -2,9 +2,27 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { addMonths, format, parseISO, differenceInCalendarDays } from 'date-fns'
-import { CreditCard, AlertCircle, Search } from 'lucide-react'
-import { Loan } from '@/lib/types'
+import { CreditCard, AlertCircle, Search, Filter } from 'lucide-react'
+import { Loan, LoanType } from '@/lib/types'
 import { formatCurrency } from '@/lib/utils'
+
+// Product-type chips — same look as the dashboard's strip, but scoped to
+// this page. Land Bucket is intentionally absent: no loan_type maps to it.
+type FilterKey = 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh'
+
+const CHIPS: { key: FilterKey; label: string; color: string; types: LoanType[] }[] = [
+  { key: 'sfr',           label: 'SFR',           color: '#58A6FF', types: ['SFR'] },
+  { key: 'mfr',           label: 'MFR',           color: '#D4A853', types: ['MFR'] },
+  { key: 'and',           label: 'A&D',           color: '#3FB950', types: ['A&D'] },
+  { key: 'raw_land',      label: 'Raw Land',      color: '#8B949E', types: ['RAW_LAND'] },
+  { key: 'finished_lots', label: 'Finished Lots', color: '#A371F7', types: ['FINISHED_LOTS'] },
+  // HHH/JV folds in UNKNOWN, same convention as the dashboard / engine.
+  { key: 'hhh',           label: 'HHH/JV',        color: '#F85149', types: ['HHH', 'UNKNOWN'] },
+]
+
+// Reverse lookup: loan_type → chip key (for filter membership tests).
+const LOAN_TYPE_TO_CHIP = new Map<LoanType, FilterKey>()
+for (const c of CHIPS) for (const t of c.types) LOAN_TYPE_TO_CHIP.set(t, c.key)
 
 interface LoansResponse {
   loans: Loan[]
@@ -49,6 +67,7 @@ export default function LoansPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
   const [filter, setFilter]   = useState('')
+  const [active, setActive]   = useState<Set<FilterKey>>(new Set(CHIPS.map(c => c.key)))
 
   const load = async () => {
     setLoading(true); setError(null)
@@ -75,14 +94,21 @@ export default function LoansPage() {
   const filteredLoans = useMemo(() => {
     if (!data) return []
     const q = filter.trim().toLowerCase()
-    if (!q) return data.loans
-    return data.loans.filter(l =>
-      l.loan_number.toLowerCase().includes(q) ||
-      l.borrower.toLowerCase().includes(q) ||
-      (l.loan_program ?? '').toLowerCase().includes(q) ||
-      (l.development_name ?? '').toLowerCase().includes(q)
-    )
-  }, [data, filter])
+    return data.loans.filter(l => {
+      // Product-type chip gate. UNKNOWN loans ride the HHH chip; any loan whose
+      // type isn't in CHIPS (shouldn't happen given the LoanType union) drops
+      // out when not all chips are active.
+      const chip = LOAN_TYPE_TO_CHIP.get(l.loan_type)
+      if (!chip || !active.has(chip)) return false
+      if (!q) return true
+      return (
+        l.loan_number.toLowerCase().includes(q) ||
+        l.borrower.toLowerCase().includes(q) ||
+        (l.loan_program ?? '').toLowerCase().includes(q) ||
+        (l.development_name ?? '').toLowerCase().includes(q)
+      )
+    })
+  }, [data, filter, active])
 
   // Per-month grand total across the filtered set.
   const monthTotals = useMemo(() => {
@@ -108,6 +134,13 @@ export default function LoansPage() {
 
   const today = parseISO(data.startDate)
 
+  const toggle = (key: FilterKey) => {
+    const next = new Set(active)
+    if (next.has(key)) next.delete(key); else next.add(key)
+    setActive(next)
+  }
+  const chipsFiltered = active.size < CHIPS.length
+
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between fade-up fade-up-1">
@@ -129,6 +162,37 @@ export default function LoansPage() {
             onChange={e => setFilter(e.target.value)}
             className="form-input text-xs pl-7 pr-3 py-1.5 w-80"
           />
+        </div>
+      </div>
+
+      {/* Product-type chip filter — scoped to this page only. */}
+      <div className="card fade-up fade-up-1.5 p-3 flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1.5 text-xs text-fg-dim mr-1">
+          <Filter className="w-3.5 h-3.5" />
+          <span>Product types:</span>
+        </div>
+        {CHIPS.map(chip => {
+          const on = active.has(chip.key)
+          return (
+            <button
+              key={chip.key}
+              onClick={() => toggle(chip.key)}
+              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium
+                          border transition-all
+                          ${on
+                            ? 'border-border-strong text-fg bg-surface'
+                            : 'border-border text-fg-dim opacity-60 hover:opacity-100'}`}
+              title={on ? `Hide ${chip.label}` : `Show ${chip.label}`}
+            >
+              <span className="w-2 h-2 rounded-full"
+                    style={{ background: on ? chip.color : 'transparent', border: `1px solid ${chip.color}` }} />
+              {chip.label}
+            </button>
+          )
+        })}
+        <div className="flex items-center gap-1 ml-auto">
+          <button onClick={() => setActive(new Set(CHIPS.map(c => c.key)))} className="btn-ghost text-[10px]">All</button>
+          <button onClick={() => setActive(new Set())} className="btn-ghost text-[10px]">None</button>
         </div>
       </div>
 
@@ -155,7 +219,7 @@ export default function LoansPage() {
               {filteredLoans.length === 0 ? (
                 <tr>
                   <td colSpan={9 + months.length} className="text-center text-xs text-fg-dim py-8">
-                    {filter ? 'No loans match the filter.' : 'No loans imported.'}
+                    {filter || chipsFiltered ? 'No loans match the current filter.' : 'No loans imported.'}
                   </td>
                 </tr>
               ) : filteredLoans.map(loan => (
@@ -189,7 +253,7 @@ export default function LoansPage() {
                   </td>
                   <td colSpan={8} className="text-[10px] text-fg-dim">
                     {filteredLoans.length} loan{filteredLoans.length === 1 ? '' : 's'}
-                    {filter && ` (filtered from ${data.loans.length})`}
+                    {(filter || chipsFiltered) && ` (filtered from ${data.loans.length})`}
                   </td>
                   {monthTotals.map((t, i) => (
                     <td key={i} className="num">{formatCurrency(t, true)}</td>

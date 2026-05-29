@@ -13,7 +13,18 @@ import {
   ForecastResult,
   NewOriginationEntry,
   HHHJVProject,
+  AAndDLoan,
+  AAndDLoanMonth,
+  AAndDLoanSchedule,
+  ParentCompany,
+  ParentCompanyPattern,
+  BorrowerParentMapping,
+  ByParentSegmentBalance,
 } from './types'
+
+// Key used in MonthlyBalance.by_parent for loans whose borrower didn't match
+// any parent company (no explicit mapping and no pattern hit).
+export const UNASSIGNED_PARENT_KEY = '__none__'
 
 // Vertical loan amount = lot_price × this multiple. Quick default until the
 // per-project / per-builder size is wired through the schema.
@@ -84,6 +95,7 @@ function runLandBucket(
     lots_sold_cumulative: 0,
     lots_remaining: 0,
     sale_proceeds: 0,
+    starting_balance: 0,
     ending_balance: 0,
     interest_income: 0,
     new_vertical_origs_count: 0,
@@ -108,6 +120,10 @@ function runLandBucket(
     for (let i = 0; i < months.length; i++) {
       const { date: monthDate, key, label } = months[i]
       const lotsRemaining = Math.max(0, project.total_lots - lotsSoldCum)
+      // Captured BEFORE any sale activity this month, so month 0's starting
+      // balance = project.balance_outstanding (matches the Land Bucket tab's
+      // Grand total). Subsequent months pick up the prior month's ending.
+      const startingBalance = balance
 
       // Interest computed on starting balance — fixed rate, paid current.
       const interestIncome = balance * project.interest_rate / 12
@@ -152,6 +168,7 @@ function runLandBucket(
         lots_sold_cumulative: lotsSoldCum,
         lots_remaining: project.total_lots - lotsSoldCum,
         sale_proceeds: proceeds,
+        starting_balance: startingBalance,
         ending_balance: balance,
         interest_income: interestIncome,
         new_vertical_origs_count: newOrigsCount,
@@ -163,6 +180,7 @@ function runLandBucket(
       t.lots_sold_cumulative += lotsSoldCum
       t.lots_remaining += project.total_lots - lotsSoldCum
       t.sale_proceeds += proceeds
+      t.starting_balance += startingBalance
       t.ending_balance += balance
       t.interest_income += interestIncome
       t.new_vertical_origs_count += newOrigsCount
@@ -236,6 +254,125 @@ function hhhJvBalanceForMonth(p: HHHJVProject, monthKey: string): number {
   return p.balance_outstanding > 0 ? p.balance_outstanding : 0
 }
 
+// ─── A&D loans ───────────────────────────────────────────────────────────────
+// Peak balance = 90% of total_loan_amount; the loan ramps from initial_balance
+// to peak over draw_period_months, then releases pay it down. Each release =
+// lots × (total_loan / total_lots) × premium%. See migration 011.
+const A_AND_D_PEAK_FRACTION = 0.9
+
+// Per-loan stateful projection over the forecast horizon. Returns the
+// full month-by-month schedule (used for the per-loan stacked chart) and
+// the totals contributor array (used by the main loop).
+function projectAAndDLoan(
+  loan: AAndDLoan,
+  builderName: string | null,
+  months: MonthSpec[],
+): { schedule: AAndDLoanSchedule; contributions: number[] } {
+  const monthsOut: AAndDLoanMonth[] = []
+  const contributions = new Array<number>(months.length).fill(0)
+
+  const origKey = loan.origination_date ? loan.origination_date.slice(0, 7) : null
+  const releaseKey = loan.release_start_date ? loan.release_start_date.slice(0, 7) : null
+  const peak = Math.max(loan.initial_balance, loan.total_loan_amount * A_AND_D_PEAK_FRACTION)
+  const totalDraws = Math.max(0, peak - loan.initial_balance)
+  const linearDraw = loan.draw_period_months > 0 ? totalDraws / loan.draw_period_months : 0
+  const lotReleasePrice = loan.total_lots > 0
+    ? (loan.total_loan_amount / loan.total_lots) * (loan.lot_release_premium_pct / 100)
+    : 0
+  const linearLotsPerMonth = loan.release_period_months > 0
+    ? loan.total_lots / loan.release_period_months
+    : 0
+
+  let balance = 0
+  let originated = false
+  let drawMonthsApplied = 0
+  let lotsReleased = 0
+  let lotsAcc = 0
+
+  for (let i = 0; i < months.length; i++) {
+    const monthKey = months[i].key
+
+    // Pre-origination: contributes nothing.
+    if (!origKey || monthKey < origKey) {
+      monthsOut.push({
+        month: monthKey,
+        label: months[i].label,
+        starting_balance: balance,
+        draw_this_month: 0,
+        lots_released: 0,
+        lots_released_cum: lotsReleased,
+        release_proceeds: 0,
+        ending_balance: balance,
+      })
+      contributions[i] = balance
+      continue
+    }
+
+    // First time we reach the origination month, the principal lands.
+    if (!originated) {
+      balance = loan.initial_balance
+      originated = true
+    }
+
+    const startingBalance = balance
+
+    // Draw phase: month between origination and release_start (or no release
+    // configured), still within the draw window.
+    let drawThisMonth = 0
+    const inDrawWindow = (!releaseKey || monthKey < releaseKey) && drawMonthsApplied < loan.draw_period_months
+    if (inDrawWindow) {
+      const override = Number(loan.draw_schedule?.[monthKey] ?? 0)
+      drawThisMonth = override > 0 ? override : linearDraw
+      balance = Math.min(peak, balance + drawThisMonth)
+      drawMonthsApplied += 1
+    }
+
+    // Release phase: at/after release_start_date, while lots remain.
+    let lotsThisMonth = 0
+    let proceeds = 0
+    if (releaseKey && monthKey >= releaseKey && lotsReleased < loan.total_lots) {
+      const override = loan.release_schedule?.[monthKey]
+      if (override != null) {
+        lotsThisMonth = Math.max(0, Math.floor(Number(override) || 0))
+      } else if (linearLotsPerMonth > 0) {
+        lotsAcc += linearLotsPerMonth
+        lotsThisMonth = Math.floor(lotsAcc)
+        lotsAcc -= lotsThisMonth
+      }
+      lotsThisMonth = Math.min(lotsThisMonth, loan.total_lots - lotsReleased)
+      lotsReleased += lotsThisMonth
+      proceeds = lotsThisMonth * lotReleasePrice
+      balance = Math.max(0, balance - proceeds)
+    }
+
+    monthsOut.push({
+      month: monthKey,
+      label: months[i].label,
+      starting_balance: startingBalance,
+      draw_this_month: drawThisMonth,
+      lots_released: lotsThisMonth,
+      lots_released_cum: lotsReleased,
+      release_proceeds: proceeds,
+      ending_balance: balance,
+    })
+    // Use starting_balance so month 0 of the forecast equals the as-of value
+    // (mirrors the Land Bucket starting-balance treatment).
+    contributions[i] = startingBalance
+  }
+
+  return {
+    schedule: {
+      loan_id: loan.id,
+      loan_name: loan.name,
+      builder_name: builderName,
+      total_lots: loan.total_lots,
+      total_loan_amount: loan.total_loan_amount,
+      months: monthsOut,
+    },
+    contributions,
+  }
+}
+
 // Lot-driven origination cohort balance at month index `m`.
 function lotOriginationBalance(orig: LotOrigination, m: number): number {
   const age = m - orig.origination_month_idx
@@ -253,6 +390,10 @@ export interface ForecastInput {
   loanPrograms: LoanProgram[]
   newOriginations: NewOriginationEntry[]
   hhhJvProjects: HHHJVProject[]
+  aAndDLoans: AAndDLoan[]
+  parentCompanies: ParentCompany[]
+  parentCompanyPatterns: ParentCompanyPattern[]
+  borrowerParentMappings: BorrowerParentMapping[]
   settings: ForecastSettings
   versionLabel: string
   asOfDate: string
@@ -274,6 +415,54 @@ export function runForecast(input: ForecastInput): ForecastResult {
 
   const lb = runLandBucket(input.landBucketProjects, buildersById, programsById, months)
   const monthIndexByKey = new Map(months.map((m, i) => [m.key, i]))
+
+  // A&D planned loans: project each loan's lifecycle, keep per-month
+  // schedules for the /a-and-d projection card, and a totals array to add
+  // into the A&D segment in the main loop below.
+  const aAndDSchedules: AAndDLoanSchedule[] = []
+  const aAndDContribByMonth = new Array<number>(months.length).fill(0)
+  for (const loan of input.aAndDLoans) {
+    const builderName = loan.builder_id
+      ? buildersById.get(loan.builder_id)?.name ?? null
+      : null
+    const { schedule, contributions } = projectAAndDLoan(loan, builderName, months)
+    aAndDSchedules.push(schedule)
+    for (let i = 0; i < months.length; i++) aAndDContribByMonth[i] += contributions[i]
+  }
+
+  // Imported A&D loans — flat-until-maturity, no draws/releases. Built here so
+  // the /a-and-d page can show them alongside planned loans. NOT added to
+  // aAndDContribByMonth — the existing `and_existing` already counts them.
+  const importedAAndDSchedules: AAndDLoanSchedule[] = input.loans
+    .filter(l => l.loan_type === 'A&D')
+    .map<AAndDLoanSchedule>(l => {
+      const monthsOut: AAndDLoanMonth[] = months.map(m => {
+        const bal = projectExistingLoanBalance(l, m.date, input.loanPrograms, startDate)
+        return {
+          month: m.key,
+          label: m.label,
+          starting_balance: bal,
+          draw_this_month: 0,
+          lots_released: 0,
+          lots_released_cum: 0,
+          release_proceeds: 0,
+          ending_balance: bal,
+        }
+      })
+      return {
+        loan_id: l.id ?? l.loan_number,
+        loan_name: l.loan_number || l.borrower || 'Imported A&D',
+        builder_name: null,
+        total_lots: 0,
+        total_loan_amount: Math.max(
+          l.projected_balance, l.current_loan_amount, l.loan_amount_disbursed,
+        ),
+        months: monthsOut,
+        imported_borrower: l.borrower || null,
+        imported_maturity_date: l.current_loan_due_date,
+        imported_current_loan_amount: l.current_loan_amount,
+      }
+    })
 
   // Expand each new-origination entry into a recurring series of monthly
   // cohorts that draws down a lot pool. The series starts at entry.month and
@@ -355,6 +544,56 @@ export function runForecast(input: ForecastInput): ForecastResult {
   const sumDisbursed = (loans: Loan[]) =>
     loans.reduce((s, l) => s + (l.loan_amount_disbursed || 0), 0)
 
+  // Resolve borrower → parent_company_id. Explicit overrides win, then
+  // case-insensitive substring patterns, otherwise UNASSIGNED_PARENT_KEY.
+  const parentByBorrower = new Map<string, string>()
+  {
+    const overrides = new Map(input.borrowerParentMappings.map(m => [m.borrower, m.parent_company_id]))
+    const patternsByParent: { parentId: string; pattern: string }[] =
+      input.parentCompanyPatterns.map(p => ({ parentId: p.parent_company_id, pattern: p.pattern.toLowerCase() }))
+    const distinctBorrowers = new Set(input.loans.map(l => l.borrower).filter((b): b is string => !!b))
+    for (const borrower of distinctBorrowers) {
+      const explicit = overrides.get(borrower)
+      if (explicit) { parentByBorrower.set(borrower, explicit); continue }
+      const haystack = borrower.toLowerCase()
+      const match = patternsByParent.find(p => p.pattern.length > 0 && haystack.includes(p.pattern))
+      parentByBorrower.set(borrower, match ? match.parentId : UNASSIGNED_PARENT_KEY)
+    }
+  }
+  const parentIdFor = (loan: Loan): string =>
+    (loan.borrower && parentByBorrower.get(loan.borrower)) || UNASSIGNED_PARENT_KEY
+
+  // Per-segment loan groups per parent (computed once, reused every month).
+  // For each parent we precompute Loan[] arrays per segment so the monthly
+  // loop just sumExisting()'s them.
+  type ParentSegmentLoans = Record<Segment, Loan[]>
+  const emptyParentSegments = (): ParentSegmentLoans => ({
+    sfr: [], mfr: [], and: [], raw_land: [], finished_lots: [], hhh: [],
+  })
+  const loanTypeToSegment: Record<LoanType, Segment> = {
+    SFR: 'sfr', MFR: 'mfr', 'A&D': 'and', RAW_LAND: 'raw_land',
+    FINISHED_LOTS: 'finished_lots', HHH: 'hhh', UNKNOWN: 'hhh',
+  }
+  const loansByParent = new Map<string, ParentSegmentLoans>()
+  const loanCountByParent = new Map<string, number>()
+  // Seed every known parent (plus the unassigned bucket) so the dropdown
+  // always shows all parents even if none have loans yet.
+  loansByParent.set(UNASSIGNED_PARENT_KEY, emptyParentSegments())
+  loanCountByParent.set(UNASSIGNED_PARENT_KEY, 0)
+  for (const p of input.parentCompanies) {
+    loansByParent.set(p.id, emptyParentSegments())
+    loanCountByParent.set(p.id, 0)
+  }
+  for (const l of input.loans) {
+    const parentId = parentIdFor(l)
+    if (!loansByParent.has(parentId)) {
+      loansByParent.set(parentId, emptyParentSegments())
+      loanCountByParent.set(parentId, 0)
+    }
+    loansByParent.get(parentId)![loanTypeToSegment[l.loan_type]].push(l)
+    loanCountByParent.set(parentId, (loanCountByParent.get(parentId) ?? 0) + 1)
+  }
+
   const monthly: MonthlyBalance[] = []
   let prevTotalAll = 0
   const prevExistingBalances = new Map<string, number>()
@@ -376,7 +615,22 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const newBySegment: Record<Segment, number> = {
       sfr: 0, mfr: 0, raw_land: 0, and: 0, finished_lots: 0, hhh: 0,
     }
+    // Per-segment new-origination count + amount AT origination month — feeds
+    // the forecast page's product-type chip filter.
+    const newOrigsBySeg: Record<Segment, { count: number; amount: number }> = {
+      sfr:           { count: 0, amount: 0 },
+      mfr:           { count: 0, amount: 0 },
+      and:           { count: 0, amount: 0 },
+      raw_land:      { count: 0, amount: 0 },
+      finished_lots: { count: 0, amount: 0 },
+      hhh:           { count: 0, amount: 0 },
+    }
     for (const orig of allOriginations) {
+      if (orig.origination_month_idx === i) {
+        const seg = PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]
+        newOrigsBySeg[seg].count  += orig.count
+        newOrigsBySeg[seg].amount += orig.count * orig.max_amount_per_loan
+      }
       const bal = lotOriginationBalance(orig, i)
       if (bal === 0) continue
       newBySegment[PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]] += bal
@@ -384,7 +638,10 @@ export function runForecast(input: ForecastInput): ForecastResult {
 
     const sfr = sfr_existing + newBySegment.sfr
     const mfr = mfr_existing + newBySegment.mfr
-    const and = and_existing + newBySegment.and
+    // Planned A&D loans (forward-modeled lifecycle) stack on top of imported
+    // A&D loans and forecasted A&D cohorts.
+    const aAndDPlanned = aAndDContribByMonth[i]
+    const and = and_existing + newBySegment.and + aAndDPlanned
     const raw_land = raw_existing + newBySegment.raw_land
     const finished_lots = fl_existing + newBySegment.finished_lots
     // HHH/JV projects feed the HHH/JV segment (balance == outstanding).
@@ -398,13 +655,38 @@ export function runForecast(input: ForecastInput): ForecastResult {
       loans.reduce((s, l) => s + projectExistingLoanOutstanding(l, m.date), 0)
     const outstanding_sfr           = sumExistingOut(loansByType.SFR)           + newBySegment.sfr
     const outstanding_mfr           = sumExistingOut(loansByType.MFR)           + newBySegment.mfr
-    const outstanding_and           = sumExistingOut(loansByType['A&D'])        + newBySegment.and
+    const outstanding_and           = sumExistingOut(loansByType['A&D'])        + newBySegment.and + aAndDPlanned
     const outstanding_raw_land      = sumExistingOut(loansByType.RAW_LAND)      + newBySegment.raw_land
     const outstanding_finished_lots = sumExistingOut(loansByType.FINISHED_LOTS) + newBySegment.finished_lots
     const outstanding_hhh           = sumExistingOut(loansByType.HHH) +
                                       sumExistingOut(loansByType.UNKNOWN) + newBySegment.hhh + hhhJv
 
-    const land_bucket = lb.totals[i].ending_balance
+    // Existing-loan segment + outstanding breakdown by parent company. Only
+    // the borrower-attributed (imported) loans contribute — forecasted
+    // cohorts, Land Bucket, HHH/JV, A&D planned stay outside the parent
+    // filter per the design.
+    const by_parent: Record<string, ByParentSegmentBalance> = {}
+    for (const [parentId, segs] of loansByParent) {
+      by_parent[parentId] = {
+        sfr:           sumExisting(segs.sfr),
+        mfr:           sumExisting(segs.mfr),
+        and:           sumExisting(segs.and),
+        raw_land:      sumExisting(segs.raw_land),
+        finished_lots: sumExisting(segs.finished_lots),
+        hhh:           sumExisting(segs.hhh),
+        outstanding_sfr:           sumExistingOut(segs.sfr),
+        outstanding_mfr:           sumExistingOut(segs.mfr),
+        outstanding_and:           sumExistingOut(segs.and),
+        outstanding_raw_land:      sumExistingOut(segs.raw_land),
+        outstanding_finished_lots: sumExistingOut(segs.finished_lots),
+        outstanding_hhh:           sumExistingOut(segs.hhh),
+      }
+    }
+
+    // Use the starting balance so the Dashboard tile / Total (All) anchor to
+    // the Land Bucket tab's Grand total (Σ balance_outstanding) at month 0,
+    // then move with each month's net activity going forward.
+    const land_bucket = lb.totals[i].starting_balance
     const total_loans = sfr + mfr + and + raw_land + finished_lots + hhh
     const total_all = total_loans + land_bucket
 
@@ -475,6 +757,12 @@ export function runForecast(input: ForecastInput): ForecastResult {
       new_originations_mfr: newBySegment.mfr,
       forecasted_sfr: newBySegment.sfr,
       forecasted_mfr: newBySegment.mfr,
+      forecasted_and: newBySegment.and,
+      forecasted_raw_land: newBySegment.raw_land,
+      forecasted_finished_lots: newBySegment.finished_lots,
+      forecasted_hhh: newBySegment.hhh,
+      new_origs_by_segment: newOrigsBySeg,
+      by_parent,
       forecasted_total:
         newBySegment.sfr + newBySegment.mfr + newBySegment.and +
         newBySegment.raw_land + newBySegment.finished_lots + newBySegment.hhh,
@@ -521,5 +809,9 @@ export function runForecast(input: ForecastInput): ForecastResult {
       total: m0.total_all,
     },
     land_bucket_schedules: lb.schedules,
+    a_and_d_schedules: aAndDSchedules,
+    imported_a_and_d_schedules: importedAAndDSchedules,
+    parent_companies: input.parentCompanies.map(p => ({ id: p.id, name: p.name })),
+    parent_loan_counts: Object.fromEntries(loanCountByParent),
   }
 }

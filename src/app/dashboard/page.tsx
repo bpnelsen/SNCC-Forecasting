@@ -13,6 +13,19 @@ import { RefreshCw, AlertCircle, Filter, Building2, Check, ChevronDown } from 'l
 // UNASSIGNED_PARENT_KEY in src/lib/calculator.ts.
 const UNASSIGNED_PARENT_KEY = '__none__'
 
+// Render the active version's as_of_date (YYYY-MM-DD from the engine) as
+// "May 14, 2026". Parsed manually so timezone shifts can't bump it by a day.
+function formatAsOf(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso)
+  if (!m) return iso
+  const [_, y, mo, d] = m
+  const months = ['January','February','March','April','May','June',
+                  'July','August','September','October','November','December']
+  const mi = Math.max(0, Math.min(11, Number(mo) - 1))
+  return `${months[mi]} ${Number(d)}, ${y}`
+}
+
 // The set of toggleable product/category buckets shown in the dashboard.
 // Land Bucket isn't a "product type" per se but it sits next to the loan
 // segments in every chart, so it lives in the same filter strip.
@@ -205,7 +218,7 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-lg font-medium text-fg-strong">Portfolio Dashboard</h1>
           <p className="text-xs text-fg-dim mt-0.5">
-            {data.version_label} · {data.total_active_loans} active loans · As of {data.as_of_date}
+            {data.version_label} · {data.total_active_loans} active loans · As of {formatAsOf(data.as_of_date)}
           </p>
         </div>
         <button onClick={load} className="btn-ghost flex items-center gap-1.5">

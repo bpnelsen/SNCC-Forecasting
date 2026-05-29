@@ -118,6 +118,10 @@ export interface MonthlyBalance {
     finished_lots: { count: number; amount: number }
     hhh: { count: number; amount: number }
   }
+  // Existing-loan segments split by parent company so the dashboard can
+  // multi-select-filter without re-running the engine. Key '__none__' holds
+  // loans whose borrower didn't match any parent.
+  by_parent: Record<string, ByParentSegmentBalance>
   yield_active: number
   yield_projected: number
   yield_land_bucket: number
@@ -162,6 +166,10 @@ export interface ForecastResult {
   }
   land_bucket_schedules: LandBucketProjectSchedule[]
   a_and_d_schedules: AAndDLoanSchedule[]
+  // Parent companies known to the engine + how many loans rolled under each.
+  // '__none__' = unassigned. The dashboard renders the dropdown from these.
+  parent_companies: Array<{ id: string; name: string }>
+  parent_loan_counts: Record<string, number>
   // Imported A&D loans (loan_type === 'A&D' from the Current Report) projected
   // flat-until-maturity. Surfaced so the A&D tab can show them alongside
   // forward-planned A&D loans without changing how the engine values them.
@@ -236,6 +244,40 @@ export interface HHHJVProject {
 // and forecasted A&D cohorts. Models the full lifecycle: origination →
 // initial_balance, draw to peak (90% of total_loan_amount) over
 // draw_period_months, then lot releases pay it down. See migration 011.
+// Parent Company groups borrowers across loans so the dashboard can slice
+// imported-loan metrics by parent. See migration 012.
+export interface ParentCompany {
+  id: string
+  name: string
+  notes: string | null
+}
+export interface ParentCompanyPattern {
+  id: string
+  parent_company_id: string
+  pattern: string
+}
+export interface BorrowerParentMapping {
+  borrower: string
+  parent_company_id: string
+}
+// Per-segment imported-loan balance for a single parent company in one month.
+// Forecasted cohorts, Land Bucket, HHH/JV, A&D planned are not included here
+// (the parent filter is borrowers-only per the design).
+export interface ByParentSegmentBalance {
+  sfr: number
+  mfr: number
+  and: number
+  raw_land: number
+  finished_lots: number
+  hhh: number
+  outstanding_sfr: number
+  outstanding_mfr: number
+  outstanding_and: number
+  outstanding_raw_land: number
+  outstanding_finished_lots: number
+  outstanding_hhh: number
+}
+
 export interface AAndDLoan {
   id: string
   name: string

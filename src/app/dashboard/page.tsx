@@ -242,8 +242,8 @@ export default function DashboardPage() {
         })}
         <div className="flex items-center gap-1 ml-auto">
           <ParentCompanyDropdown
-            parents={data.parent_companies}
-            parentLoanCounts={data.parent_loan_counts}
+            parents={data.parent_companies ?? []}
+            parentLoanCounts={data.parent_loan_counts ?? {}}
             selected={selectedParents}
             onChange={setSelectedParents}
           />
@@ -520,8 +520,17 @@ function ParentCompanyDropdown({
         </div>
       </div>
       {rows.length === 1 && rows[0].id === UNASSIGNED_PARENT_KEY ? (
-        <div className="text-[10px] text-fg-dim italic px-3 py-3">
-          No parent companies yet — add one on the Assumptions tab.
+        <div className="text-[10px] text-fg-dim italic px-3 py-3 space-y-1.5">
+          <div>The forecast engine returned 0 parent companies.</div>
+          <div>
+            If you already added some on Assumptions, this almost always means
+            the deployed <code>/api/calculate</code> hasn&rsquo;t been refreshed.
+            Try: <strong>hard-refresh</strong> (⌘⇧R / Ctrl⇧R) or check{' '}
+            <a className="underline" href="/api/calculate" target="_blank" rel="noreferrer">
+              /api/calculate
+            </a>{' '}
+            for a <code>parent_companies</code> array.
+          </div>
         </div>
       ) : rows.map(r => {
         const on = selected === null ? true : selected.has(r.id)

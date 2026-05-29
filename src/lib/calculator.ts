@@ -792,7 +792,27 @@ export function runForecast(input: ForecastInput): ForecastResult {
       yield_projected += lotOriginationBalance(orig, i) * rate / 12
     }
     const yield_land_bucket = lb.totals[i].interest_income
+    // HHH/JV projects: while between dev_start_date and dev_end_date, they
+    // earn interest on balance_outstanding at the project's interest_rate.
+    let yield_hhh_jv = 0
+    for (const project of input.hhhJvProjects) {
+      const bal = hhhJvBalanceForMonth(project, m.key)
+      if (bal === 0) continue
+      yield_hhh_jv += bal * (project.interest_rate || 0) / 12
+    }
+    // A&D planned loans: per-loan starting balance × interest_rate ÷ 12. Use
+    // starting_balance to match the LB convention (interest charged on the
+    // month's opening balance, before draws/releases within the month).
+    let yield_a_and_d_planned = 0
+    for (let k = 0; k < aAndDSchedules.length; k++) {
+      const loan  = input.aAndDLoans[k]
+      const sched = aAndDSchedules[k]
+      const bal = sched.months[i]?.starting_balance ?? 0
+      if (bal === 0) continue
+      yield_a_and_d_planned += bal * (loan?.interest_rate || 0) / 12
+    }
     const total_income = yield_active + yield_projected + yield_land_bucket
+                       + yield_hhh_jv + yield_a_and_d_planned
     const annualized_yield_pct = total_all > 0 ? (total_income / total_all) * 12 : 0
 
     // Payoff detection: existing loan whose balance transitioned to 0
@@ -858,6 +878,8 @@ export function runForecast(input: ForecastInput): ForecastResult {
       yield_active,
       yield_projected,
       yield_land_bucket,
+      yield_hhh_jv,
+      yield_a_and_d_planned,
       profit_sharing: 0,
       total_income,
       annualized_yield_pct,

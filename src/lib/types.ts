@@ -125,6 +125,12 @@ export interface MonthlyBalance {
   yield_active: number
   yield_projected: number
   yield_land_bucket: number
+  // Interest accrued each month on HHH/JV projects (project.balance_outstanding
+  // × interest_rate ÷ 12 while active). Was previously omitted from total_income.
+  yield_hhh_jv: number
+  // Interest accrued each month on forward-planned A&D loans, computed from
+  // each loan's starting_balance × interest_rate ÷ 12.
+  yield_a_and_d_planned: number
   profit_sharing: number
   total_income: number
   annualized_yield_pct: number

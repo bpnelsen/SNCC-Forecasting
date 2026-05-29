@@ -51,8 +51,11 @@ const ALL_KEYS = new Set<FilterKey>(CHIPS.map(c => c.key))
 
 // Slice a single segment by the active chip + selected parents. When the
 // parent filter is on, both the existing (imported by borrower→parent) and
-// the forecasted (builder→parent) portions come from m.by_parent so every
-// builder-attributed contribution honors the same selection.
+// the builder-attributed (forecasted cohorts + HHH/JV + A&D planned)
+// portions come from m.by_parent so every contribution honors the same
+// selection. The non-filtered branch reads m.<seg> / m.outstanding_<seg>
+// directly — those already fold in HHH/JV and A&D planned at the engine
+// level, so leaving them as-is keeps unfiltered numbers identical.
 type SegKey = 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh'
 function sliceSegment(
   m: MonthlyBalance,
@@ -74,6 +77,12 @@ function sliceSegment(
     existing    += slot[seg]
     forecasted  += slot[`forecasted_${seg}` as const]
     outstanding += slot[`outstanding_${seg}` as const]
+    // hhh segment also carries HHH/JV project balances; and segment carries
+    // forward-planned A&D loan balances. The engine adds these into m.<seg>
+    // and m.outstanding_<seg> globally — the per-parent slice has to do
+    // the same so totals are consistent across filter states.
+    if (seg === 'hhh') forecasted += slot.hhh_jv_balance
+    if (seg === 'and') forecasted += slot.a_and_d_planned
   }
   return { existing, forecasted, outstanding }
 }

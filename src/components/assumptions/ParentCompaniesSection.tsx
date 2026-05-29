@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Plus, Save, Trash2, X, AlertCircle, CheckCircle, Building2, Pencil } from 'lucide-react'
-import { ParentCompany, ParentCompanyPattern, BorrowerParentMapping } from '@/lib/types'
+import { ParentCompany, ParentCompanyPattern, BorrowerParentMapping, Builder } from '@/lib/types'
 
 interface Borrower { borrower: string; loan_count: number }
 
@@ -14,6 +14,7 @@ export function ParentCompaniesSection() {
   const [patterns,  setPatterns]  = useState<ParentCompanyPattern[]>([])
   const [mappings,  setMappings]  = useState<BorrowerParentMapping[]>([])
   const [borrowers, setBorrowers] = useState<Borrower[]>([])
+  const [builders,  setBuilders]  = useState<Builder[]>([])
   const [loading,   setLoading]   = useState(true)
   const [busy,      setBusy]      = useState(false)
   const [msg,       setMsg]       = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
@@ -41,16 +42,18 @@ export function ParentCompaniesSection() {
       return body
     }
     try {
-      const [p, pat, m, b] = await Promise.all([
+      const [p, pat, m, b, bldrs] = await Promise.all([
         fetchJSON('/api/parent-companies'),
         fetchJSON('/api/parent-company-patterns'),
         fetchJSON('/api/borrower-mappings'),
         fetchJSON('/api/borrowers'),
+        fetchJSON('/api/builders'),
       ])
       setParents(Array.isArray(p) ? p : [])
       setPatterns(Array.isArray(pat) ? pat : [])
       setMappings(Array.isArray(m) ? m : [])
       setBorrowers(Array.isArray(b) ? b : [])
+      setBuilders(Array.isArray(bldrs) ? bldrs : [])
     } catch (e) {
       setMsg({
         type: 'err',
@@ -138,6 +141,21 @@ export function ParentCompaniesSection() {
       await load()
     } catch (e) {
       setMsg({ type: 'err', text: e instanceof Error ? e.message : 'Delete failed' })
+    } finally { setBusy(false) }
+  }
+
+  // Builder → parent assignment (migration 013). null = clear the FK.
+  const assignBuilder = async (builderId: string, parentId: string | null) => {
+    setBusy(true); setMsg(null)
+    try {
+      const res = await fetch(`/api/builders/${builderId}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parent_company_id: parentId }),
+      })
+      if (!res.ok) throw new Error(await readError(res, 'Assign failed'))
+      await load()
+    } catch (e) {
+      setMsg({ type: 'err', text: e instanceof Error ? e.message : 'Assign failed' })
     } finally { setBusy(false) }
   }
 
@@ -250,6 +268,8 @@ export function ParentCompaniesSection() {
                 matched={matchedByPattern}
                 borrowers={borrowers}
                 allParents={parents}
+                builders={builders.filter(b => b.parent_company_id === parent.id)}
+                availableBuilders={builders.filter(b => !b.parent_company_id)}
                 expanded={expanded === parent.id}
                 onToggle={() => setExpanded(expanded === parent.id ? null : parent.id)}
                 onRename={renameParent}
@@ -257,6 +277,7 @@ export function ParentCompaniesSection() {
                 onAddPattern={addPattern}
                 onRemovePattern={removePattern}
                 onMap={upsertMapping}
+                onAssignBuilder={assignBuilder}
                 busy={busy}
               />
             ))}
@@ -313,8 +334,8 @@ function AddParent({ onAdd, busy }: { onAdd: (n: string) => void; busy: boolean 
 }
 
 function ParentRow({
-  parent, patterns, explicit, matched, borrowers, allParents,
-  expanded, onToggle, onRename, onDelete, onAddPattern, onRemovePattern, onMap, busy,
+  parent, patterns, explicit, matched, borrowers, allParents, builders, availableBuilders,
+  expanded, onToggle, onRename, onDelete, onAddPattern, onRemovePattern, onMap, onAssignBuilder, busy,
 }: {
   parent: ParentCompany
   patterns: ParentCompanyPattern[]
@@ -322,6 +343,8 @@ function ParentRow({
   matched: string[]
   borrowers: Borrower[]
   allParents: ParentCompany[]
+  builders: Builder[]
+  availableBuilders: Builder[]
   expanded: boolean
   onToggle: () => void
   onRename: (p: ParentCompany, n: string) => void
@@ -329,6 +352,7 @@ function ParentRow({
   onAddPattern: (parentId: string, pattern: string) => void
   onRemovePattern: (id: string) => void
   onMap: (borrower: string, parentId: string | null) => void
+  onAssignBuilder: (builderId: string, parentId: string | null) => void
   busy: boolean
 }) {
   const [editingName, setEditingName] = useState<string | null>(null)
@@ -354,7 +378,7 @@ function ParentRow({
                    className="form-input text-xs max-w-xs" />
           )}
           <span className="text-[10px] text-fg-dim font-mono">
-            · {patterns.length} pattern{patterns.length === 1 ? '' : 's'} · {totalCovered} borrower{totalCovered === 1 ? '' : 's'}
+            · {patterns.length} pattern{patterns.length === 1 ? '' : 's'} · {totalCovered} borrower{totalCovered === 1 ? '' : 's'} · {builders.length} builder{builders.length === 1 ? '' : 's'}
           </span>
         </div>
         <div className="flex items-center gap-1">
@@ -451,9 +475,70 @@ function ParentRow({
               </div>
             </div>
           )}
+
+          {/* Builders — direct FK on the builders table (migration 013). The
+              picker only lists builders that are currently unassigned;
+              reassigning a builder already attached to another parent is
+              done by going to that parent first. */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-fg-dim mb-1.5">
+              Builders
+            </div>
+            {builders.length === 0 ? (
+              <div className="text-[10px] text-fg-dim italic mb-2">
+                No builders assigned. Pick one below to group it under {parent.name}.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5 mb-2">
+                {builders.map(b => (
+                  <div key={b.id} className="flex items-center justify-between gap-2 px-2 py-1 border border-border-strong rounded">
+                    <span className="truncate text-xs text-fg" title={b.name}>{b.name}</span>
+                    <button onClick={() => onAssignBuilder(b.id, null)} disabled={busy}
+                            className="text-fg-dim hover:text-danger">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <BuilderPicker
+                builders={availableBuilders}
+                onPick={id => onAssignBuilder(id, parent.id)}
+                disabled={busy}
+              />
+              <span className="text-[10px] text-fg-dim italic">
+                Adds the builder to {parent.name} (sets builders.parent_company_id).
+              </span>
+            </div>
+          </div>
         </div>
       )}
     </div>
+  )
+}
+
+function BuilderPicker({
+  builders, onPick, disabled,
+}: {
+  builders: Builder[]
+  onPick: (id: string) => void
+  disabled: boolean
+}) {
+  return (
+    <select
+      className="form-input text-xs max-w-xs"
+      disabled={disabled || builders.length === 0}
+      value=""
+      onChange={e => { if (e.target.value) { onPick(e.target.value); e.currentTarget.value = '' } }}
+    >
+      <option value="">
+        {builders.length === 0 ? '— no unassigned builders —' : '— pick a builder —'}
+      </option>
+      {builders.map(b => (
+        <option key={b.id} value={b.id}>{b.name}</option>
+      ))}
+    </select>
   )
 }
 

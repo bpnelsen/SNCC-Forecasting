@@ -95,6 +95,22 @@ export default function LandBucketPage() {
     } finally { setBusy(false) }
   }
 
+  // Updates builders.parent_company_id (migration 013) inline from the
+  // builder chip strip. Refreshes so the forecast picks up the new mapping.
+  const setBuilderParent = async (builderId: string, parentId: string | null) => {
+    setBusy(true); setMsg(null)
+    try {
+      const res = await fetch(`/api/builders/${builderId}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parent_company_id: parentId }),
+      })
+      if (!res.ok) throw new Error((await res.json()).error || 'Update failed')
+      await load()
+    } catch (e) {
+      setMsg({ type: 'err', text: e instanceof Error ? e.message : 'Update failed' })
+    } finally { setBusy(false) }
+  }
+
   if (loading) return <div className="p-6 text-fg-dim text-sm">Loading…</div>
 
   return (
@@ -132,9 +148,12 @@ export default function LandBucketPage() {
         {builders.length === 0
           ? <span className="text-[10px] text-danger">No builders found — add one →</span>
           : builders.map(b => (
-              <span key={b.id} className="text-[10px] px-2 py-0.5 rounded bg-border text-fg">
-                {b.name}
-              </span>
+              <BuilderParentChip
+                key={b.id}
+                builder={b}
+                parents={forecast?.parent_companies ?? []}
+                onChange={parentId => setBuilderParent(b.id, parentId)}
+              />
             ))}
         <BuilderAdder onAdded={load} />
       </div>
@@ -427,6 +446,39 @@ function LotReleaseScheduleEditor({
         Set every month to 0 (or click Clear) to fall back to absorption.
       </div>
     </div>
+  )
+}
+
+// One chip per builder. Shows the builder's name and (if assigned) its parent
+// company; clicking opens an inline parent picker. Available parents come
+// from forecast.parent_companies so the strip can attach to any parent the
+// user has set up on Assumptions.
+function BuilderParentChip({
+  builder, parents, onChange,
+}: {
+  builder: Builder
+  parents: { id: string; name: string }[]
+  onChange: (parentId: string | null) => void
+}) {
+  const parentName = builder.parent_company_id
+    ? parents.find(p => p.id === builder.parent_company_id)?.name ?? '(unknown)'
+    : null
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-border/40 text-[10px]">
+      <span className="text-fg">{builder.name}</span>
+      <span className="text-fg-dim">·</span>
+      <select
+        value={builder.parent_company_id ?? ''}
+        onChange={e => onChange(e.target.value || null)}
+        className="bg-transparent text-[10px] outline-none text-fg-dim hover:text-fg focus:text-fg cursor-pointer"
+        title={parentName ? `Parent: ${parentName}` : 'Set parent company'}
+      >
+        <option value="">— no parent —</option>
+        {parents.map(p => (
+          <option key={p.id} value={p.id}>{p.name}</option>
+        ))}
+      </select>
+    </span>
   )
 }
 

@@ -32,6 +32,9 @@ export async function POST(req: NextRequest) {
     if (body.default_loan_program_id) {
       payload.default_loan_program_id = body.default_loan_program_id
     }
+    if (body.parent_company_id !== undefined) {
+      payload.parent_company_id = body.parent_company_id || null
+    }
 
     const { data, error } = await sb.from('builders').insert(payload).select().single()
     if (error) throw error

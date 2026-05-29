@@ -131,7 +131,12 @@ export async function GET() {
       borrowerParentMappings,
       settings:            settings as ForecastSettings,
       versionLabel:        version.label,
-      asOfDate:            version.as_of_date || new Date().toISOString().split('T')[0],
+      // Active version's as_of_date wins. Fall back to its import timestamp
+      // (created_at), not today — today would silently drift forward every
+      // day even when no new import has happened.
+      asOfDate:            version.as_of_date
+                             || (version.created_at ? String(version.created_at).slice(0, 10)
+                                                    : new Date().toISOString().split('T')[0]),
     })
 
     return NextResponse.json(result)

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Assumptions, LoanProgram } from '@/lib/types'
 import { Settings2, Save, AlertCircle, CheckCircle } from 'lucide-react'
+import { ParentCompaniesSection } from '@/components/assumptions/ParentCompaniesSection'
 
 export default function AssumptionsPage() {
   const [data, setData]       = useState<Assumptions | null>(null)
@@ -128,6 +129,8 @@ export default function AssumptionsPage() {
           columns still exist in the assumptions table so older data isn't lost.
 
           To plan new starts: New Originations tab → New Entry. */}
+
+      <ParentCompaniesSection />
 
       {/* Loan Programs — single source of truth for new-origination rates,
           terms and draw curves. Mirrored in the New Originations tab. */}

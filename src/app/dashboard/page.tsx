@@ -1,11 +1,16 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { StatCard } from '@/components/ui/StatCard'
 import { TotalBalanceChart, PortfolioStackedChart, IncomeChart, VarianceChart } from '@/components/charts/PortfolioCharts'
 import { ForecastResult, MonthlyBalance } from '@/lib/types'
 import { formatCurrency, formatPct, formatVariance } from '@/lib/utils'
-import { RefreshCw, AlertCircle, Filter } from 'lucide-react'
+import { RefreshCw, AlertCircle, Filter, Building2, Check, ChevronDown } from 'lucide-react'
+
+// Key the engine uses for loans whose borrower doesn't match any parent
+// company (no explicit override and no pattern hit). Kept in sync with
+// UNASSIGNED_PARENT_KEY in src/lib/calculator.ts.
+const UNASSIGNED_PARENT_KEY = '__none__'
 
 // The set of toggleable product/category buckets shown in the dashboard.
 // Land Bucket isn't a "product type" per se but it sits next to the loan
@@ -34,29 +39,85 @@ const ALL_KEYS = new Set<FilterKey>(CHIPS.map(c => c.key))
 // and variance month-over-month from the filtered values. The calculator's
 // other per-month fields (income, yields) are kept as-is — filtering is a
 // presentation-layer slice of balances, not a re-run of the engine.
-function applyFilter(months: MonthlyBalance[], active: Set<FilterKey>): MonthlyBalance[] {
+// Per-segment imported-loan totals limited to the selected parent companies.
+// Returns the global value when no parent filter is active so the caller can
+// blindly use the result. selectedParents === null = no filter; an empty set
+// would correctly return zero (the user explicitly deselected everything).
+function existingByParent(
+  m: MonthlyBalance,
+  seg: 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh',
+  selectedParents: Set<string> | null,
+): { existing: number; outstanding: number } {
+  if (selectedParents === null) {
+    // Existing = full segment minus forecasted (forecasted gets re-added by
+    // the chip logic). For 'and' / 'raw_land' / 'finished_lots' / 'hhh' we
+    // don't expose forecasted_<seg> separately, so we substitute 0.
+    const fcst = seg === 'sfr' ? m.forecasted_sfr
+              : seg === 'mfr' ? m.forecasted_mfr
+              : 0
+    return {
+      existing:    m[seg] - fcst,
+      outstanding: m[`outstanding_${seg}` as const],
+    }
+  }
+  let existing = 0
+  let outstanding = 0
+  for (const pid of selectedParents) {
+    const slot = m.by_parent[pid]
+    if (!slot) continue
+    existing    += slot[seg]
+    outstanding += slot[`outstanding_${seg}` as const]
+  }
+  return { existing, outstanding }
+}
+
+// Zero out segments not in `active`, then recompute total_loans, total_all,
+// and variance month-over-month. When `selectedParents` is non-null the
+// existing-loan portion of each segment is swapped for the per-parent
+// aggregate; forecasted cohorts / Land Bucket / etc. are unaffected because
+// the parent filter is borrower-scoped only.
+function applyFilter(
+  months: MonthlyBalance[],
+  active: Set<FilterKey>,
+  selectedParents: Set<string> | null,
+): MonthlyBalance[] {
   let prev = 0
   return months.map((m, i) => {
+    const slice = (seg: 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh',
+                   chip: FilterKey,
+                   forecastedFull: number) => {
+      if (!active.has(chip)) return { combined: 0, fcst: 0, outstanding: 0 }
+      const { existing, outstanding } = existingByParent(m, seg, selectedParents)
+      return { combined: existing + forecastedFull, fcst: forecastedFull, outstanding }
+    }
+
+    const sSfr = slice('sfr',           'sfr',           m.forecasted_sfr)
+    const sMfr = slice('mfr',           'mfr',           m.forecasted_mfr)
+    const sAnd = slice('and',           'and',           0)
+    const sRaw = slice('raw_land',      'raw_land',      0)
+    const sFin = slice('finished_lots', 'finished_lots', 0)
+    const sHhh = slice('hhh',           'hhh',           0)
+
     const filtered: MonthlyBalance = {
       ...m,
-      sfr:           active.has('sfr')           ? m.sfr           : 0,
-      mfr:           active.has('mfr')           ? m.mfr           : 0,
-      and:           active.has('and')           ? m.and           : 0,
-      raw_land:      active.has('raw_land')      ? m.raw_land      : 0,
-      finished_lots: active.has('finished_lots') ? m.finished_lots : 0,
-      hhh:           active.has('hhh')           ? m.hhh           : 0,
-      land_bucket:   active.has('land_bucket')   ? m.land_bucket   : 0,
+      sfr:           sSfr.combined,
+      mfr:           sMfr.combined,
+      and:           sAnd.combined,
+      raw_land:      sRaw.combined,
+      finished_lots: sFin.combined,
+      hhh:           sHhh.combined,
+      land_bucket:   active.has('land_bucket') ? m.land_bucket : 0,
       // Forecasted (new-origination) portion follows its parent segment's
       // chip so the split Forecasted rows zero out alongside SFR / MFR.
-      forecasted_sfr: active.has('sfr') ? m.forecasted_sfr : 0,
-      forecasted_mfr: active.has('mfr') ? m.forecasted_mfr : 0,
-      // Outstanding (drawn) per segment follows the same product-type chips.
-      outstanding_sfr:           active.has('sfr')           ? m.outstanding_sfr           : 0,
-      outstanding_mfr:           active.has('mfr')           ? m.outstanding_mfr           : 0,
-      outstanding_and:           active.has('and')           ? m.outstanding_and           : 0,
-      outstanding_raw_land:      active.has('raw_land')      ? m.outstanding_raw_land      : 0,
-      outstanding_finished_lots: active.has('finished_lots') ? m.outstanding_finished_lots : 0,
-      outstanding_hhh:           active.has('hhh')           ? m.outstanding_hhh           : 0,
+      // Parent filter doesn't touch forecasted (borrower-only scope).
+      forecasted_sfr: sSfr.fcst,
+      forecasted_mfr: sMfr.fcst,
+      outstanding_sfr:           sSfr.outstanding,
+      outstanding_mfr:           sMfr.outstanding,
+      outstanding_and:           sAnd.outstanding,
+      outstanding_raw_land:      sRaw.outstanding,
+      outstanding_finished_lots: sFin.outstanding,
+      outstanding_hhh:           sHhh.outstanding,
       total_loans: 0,
       total_all:   0,
       variance:    0,
@@ -76,11 +137,14 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
   const [active, setActive]   = useState<Set<FilterKey>>(new Set(ALL_KEYS))
+  // null = no parent filter (show all); a non-null Set selects specific
+  // parent_company ids (plus UNASSIGNED_PARENT_KEY for the catch-all).
+  const [selectedParents, setSelectedParents] = useState<Set<string> | null>(null)
 
   const load = async () => {
     setLoading(true); setError(null)
     try {
-      const res = await fetch('/api/calculate')
+      const res = await fetch('/api/calculate', { cache: 'no-store' })
       if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Failed') }
       setData(await res.json())
     } catch (e) {
@@ -91,8 +155,8 @@ export default function DashboardPage() {
   useEffect(() => { load() }, [])
 
   const months = useMemo(
-    () => data ? applyFilter(data.months, active) : [],
-    [data, active],
+    () => data ? applyFilter(data.months, active, selectedParents) : [],
+    [data, active, selectedParents],
   )
 
   if (loading) return <LoadingState />
@@ -101,12 +165,30 @@ export default function DashboardPage() {
 
   const current = months[0]
   const peak    = months.reduce((a, b) => b.total_all > a.total_all ? b : a, months[0])
-  const filtered = active.size < CHIPS.length
+  const chipsFiltered  = active.size < CHIPS.length
+  const parentsFiltered = selectedParents !== null
+  const filtered = chipsFiltered || parentsFiltered
 
-  // Outstanding (disbursed) respects the product-type chips. Land Bucket
-  // isn't a loan type so it never contributes here.
-  const outstanding = (['sfr', 'mfr', 'and', 'raw_land', 'finished_lots', 'hhh'] as const)
-    .reduce((s, k) => active.has(k) ? s + data.active_loans_outstanding[k] : s, 0)
+  // Outstanding (disbursed) respects both the product-type chips and the
+  // parent-company multi-select.
+  const SEGMENT_KEYS = ['sfr', 'mfr', 'and', 'raw_land', 'finished_lots', 'hhh'] as const
+  const outstanding = SEGMENT_KEYS.reduce((s, k) => {
+    if (!active.has(k)) return s
+    if (selectedParents === null) return s + data.active_loans_outstanding[k]
+    const monthOne = data.months[0]
+    let v = 0
+    for (const pid of selectedParents) {
+      const slot = monthOne.by_parent[pid]
+      if (slot) v += slot[`outstanding_${k}` as const]
+    }
+    return s + v
+  }, 0)
+
+  // Active-loan count likewise reflects the parent filter. The product-type
+  // chips don't (chips slice balances, not the loan count) — same as before.
+  const totalActiveLoans = selectedParents === null
+    ? data.total_active_loans
+    : Array.from(selectedParents).reduce((s, pid) => s + (data.parent_loan_counts[pid] ?? 0), 0)
 
   const toggle = (key: FilterKey) => {
     const next = new Set(active)
@@ -158,6 +240,12 @@ export default function DashboardPage() {
           )
         })}
         <div className="flex items-center gap-1 ml-auto">
+          <ParentCompanyDropdown
+            parents={data.parent_companies}
+            parentLoanCounts={data.parent_loan_counts}
+            selected={selectedParents}
+            onChange={setSelectedParents}
+          />
           <button onClick={setAll}  className="btn-ghost text-[10px]">All</button>
           <button onClick={setNone} className="btn-ghost text-[10px]">None</button>
         </div>
@@ -169,7 +257,7 @@ export default function DashboardPage() {
           value={formatCurrency(current.total_all, true)}
           delta={`Peak: ${formatCurrency(peak.total_all, true)} (${peak.label})`} accent />
         <StatCard label="Active Loans" value={formatCurrency(current.total_loans, true)}
-          subLabel={`${data.total_active_loans} loans`} />
+          subLabel={`${totalActiveLoans} loans${parentsFiltered ? ' · parent-filtered' : ''}`} />
         <StatCard label="Active Loan (Outstanding)"
           value={formatCurrency(outstanding, true)}
           subLabel={filtered ? 'disbursed · filtered' : 'disbursed to date'} />
@@ -330,6 +418,111 @@ function SummaryTable({ months }: { months: MonthlyBalance[] }) {
           ))}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// ─── Parent Company multi-select dropdown ───────────────────────────────────
+// Custom checkbox popover (native multi-select is hard to style and tab-
+// navigate). selected === null = "all"; otherwise the Set holds the parent
+// company ids that are currently active. UNASSIGNED_PARENT_KEY is a regular
+// row so the user can isolate borrowers with no parent if they want.
+
+function ParentCompanyDropdown({
+  parents, parentLoanCounts, selected, onChange,
+}: {
+  parents: { id: string; name: string }[]
+  parentLoanCounts: Record<string, number>
+  selected: Set<string> | null
+  onChange: (s: Set<string> | null) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onEsc)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onEsc)
+    }
+  }, [open])
+
+  const rows = useMemo(() => {
+    const base = parents.map(p => ({ id: p.id, name: p.name, count: parentLoanCounts[p.id] ?? 0 }))
+    base.sort((a, b) => a.name.localeCompare(b.name))
+    base.push({
+      id: UNASSIGNED_PARENT_KEY,
+      name: '(Unassigned)',
+      count: parentLoanCounts[UNASSIGNED_PARENT_KEY] ?? 0,
+    })
+    return base
+  }, [parents, parentLoanCounts])
+
+  const label = selected === null
+    ? 'Parent: All'
+    : selected.size === 0
+      ? 'Parent: none'
+      : selected.size === 1
+        ? `Parent: ${rows.find(r => r.id === Array.from(selected)[0])?.name ?? '—'}`
+        : `Parent: ${selected.size} selected`
+
+  const toggle = (id: string) => {
+    const next = selected === null ? new Set<string>() : new Set(selected)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    onChange(next)
+  }
+  const selectAll = () => onChange(null)
+  const selectNone = () => onChange(new Set())
+
+  return (
+    <div className="relative" ref={ref}>
+      <button onClick={() => setOpen(o => !o)}
+              className="btn-ghost text-[10px] inline-flex items-center gap-1.5">
+        <Building2 className="w-3 h-3" />
+        {label}
+        <ChevronDown className="w-3 h-3" />
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-1 w-64 bg-surface border border-border-strong rounded-lg shadow-xl z-30 max-h-80 overflow-y-auto">
+          <div className="px-2 py-1.5 border-b border-border flex items-center justify-between text-[10px] text-fg-dim">
+            <span>Parent companies</span>
+            <div className="flex items-center gap-1">
+              <button onClick={selectAll}  className="btn-ghost text-[10px] px-1.5 py-0.5">All</button>
+              <button onClick={selectNone} className="btn-ghost text-[10px] px-1.5 py-0.5">None</button>
+            </div>
+          </div>
+          {rows.length === 1 && rows[0].id === UNASSIGNED_PARENT_KEY ? (
+            <div className="text-[10px] text-fg-dim italic px-3 py-3">
+              No parent companies yet — add one on the Assumptions tab.
+            </div>
+          ) : rows.map(r => {
+            const on = selected === null ? true : selected.has(r.id)
+            return (
+              <button key={r.id}
+                      onClick={() => toggle(r.id)}
+                      className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs
+                                 hover:bg-border/50 text-left">
+                <span className="flex items-center gap-2">
+                  <span className={`w-3.5 h-3.5 inline-flex items-center justify-center rounded border
+                                    ${on ? 'bg-accent border-accent text-accent-on' : 'border-border-strong'}`}>
+                    {on && <Check className="w-2.5 h-2.5" />}
+                  </span>
+                  <span className={r.id === UNASSIGNED_PARENT_KEY ? 'text-fg-dim italic' : 'text-fg'}>
+                    {r.name}
+                  </span>
+                </span>
+                <span className="text-[10px] text-fg-dim font-mono">{r.count}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

@@ -20,18 +20,42 @@ export function ParentCompaniesSection() {
   const [expanded,  setExpanded]  = useState<string | null>(null)
 
   const load = async () => {
-    setLoading(true)
+    setLoading(true); setMsg(null)
+    // Helper: fetch + flag any non-2xx so the section surfaces the real
+    // backend error (e.g. "relation parent_companies does not exist" when
+    // migration 012 hasn't been applied) instead of silently rendering
+    // empty lists.
+    const fetchJSON = async (url: string) => {
+      const r = await fetch(url, { cache: 'no-store' })
+      const text = await r.text().catch(() => '')
+      let body: unknown = null
+      try { body = text ? JSON.parse(text) : null } catch { /* keep raw text */ }
+      if (!r.ok) {
+        const err = (body && typeof body === 'object' && 'error' in body)
+          ? (body as { error: unknown }).error : null
+        const msg = typeof err === 'string' ? err
+                  : err ? JSON.stringify(err)
+                  : (text || `${r.status} ${r.statusText}`)
+        throw new Error(`${url}: ${msg}`)
+      }
+      return body
+    }
     try {
       const [p, pat, m, b] = await Promise.all([
-        fetch('/api/parent-companies',         { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/parent-company-patterns',  { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/borrower-mappings',        { cache: 'no-store' }).then(r => r.json()),
-        fetch('/api/borrowers',                { cache: 'no-store' }).then(r => r.json()),
+        fetchJSON('/api/parent-companies'),
+        fetchJSON('/api/parent-company-patterns'),
+        fetchJSON('/api/borrower-mappings'),
+        fetchJSON('/api/borrowers'),
       ])
       setParents(Array.isArray(p) ? p : [])
       setPatterns(Array.isArray(pat) ? pat : [])
       setMappings(Array.isArray(m) ? m : [])
       setBorrowers(Array.isArray(b) ? b : [])
+    } catch (e) {
+      setMsg({
+        type: 'err',
+        text: e instanceof Error ? e.message : 'Failed to load parent-company data',
+      })
     } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])

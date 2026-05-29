@@ -1,6 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 
+// Supabase / PostgREST errors are plain objects; String(e) collapses them to
+// "[object Object]". Surface message / details / hint / code instead.
+function errMessage(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (e && typeof e === 'object') {
+    const o = e as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown }
+    const parts = [o.message, o.details, o.hint, o.code].filter(Boolean).map(String)
+    if (parts.length) return parts.join(' · ')
+    try { return JSON.stringify(e) } catch { /* fall through */ }
+  }
+  return String(e)
+}
+
 // POST (not PUT) updates an existing loan — some hosts reject PUT with 405.
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -26,15 +39,20 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       updated_at:              new Date().toISOString(),
     }
 
-    const { error } = await sb
+    // Chaining .select().single() forces Supabase to return the updated row.
+    // If params.id didn't match anything we get a real error instead of a
+    // silent 0-row update that looks like a success.
+    const { data, error } = await sb
       .from('a_and_d_loans')
       .update(payload)
       .eq('id', params.id)
+      .select()
+      .single()
 
     if (error) throw error
-    return NextResponse.json({ ok: true })
+    return NextResponse.json(data)
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return NextResponse.json({ error: errMessage(e) }, { status: 500 })
   }
 }
 
@@ -45,6 +63,6 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
     if (error) throw error
     return NextResponse.json({ ok: true })
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return NextResponse.json({ error: errMessage(e) }, { status: 500 })
   }
 }

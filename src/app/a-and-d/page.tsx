@@ -47,11 +47,14 @@ export default function AAndDPage() {
   const load = async () => {
     setLoading(true)
     try {
+      // cache:'no-store' so the browser HTTP cache can't serve a pre-save
+      // snapshot after the user edits and we re-fetch — without it, Save can
+      // succeed in the DB yet the page still renders the original values.
       const [l, b, fc] = await Promise.all([
-        fetch('/api/a-and-d-loans').then(r => r.json()),
-        fetch('/api/builders').then(r => r.json()),
+        fetch('/api/a-and-d-loans', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/builders', { cache: 'no-store' }).then(r => r.json()),
         // Forecast is best-effort — a missing version shouldn't block edits.
-        fetch('/api/calculate').then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch('/api/calculate', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null),
       ])
       setLoans(Array.isArray(l) ? l : [])
       setBuilders(Array.isArray(b) ? b : [])
@@ -59,6 +62,20 @@ export default function AAndDPage() {
     } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
+
+  // Always stringify API errors safely so we never render "[object Object]"
+  // if the API returns a non-string error payload.
+  async function readError(r: Response, fallback: string): Promise<string> {
+    const text = await r.text().catch(() => '')
+    let parsed: unknown = null
+    try { parsed = text ? JSON.parse(text) : null } catch { /* keep raw */ }
+    const err = (parsed && typeof parsed === 'object' && 'error' in parsed)
+      ? (parsed as { error: unknown }).error : null
+    if (typeof err === 'string' && err.trim()) return err
+    if (err && typeof err === 'object') return JSON.stringify(err)
+    if (text) return `${r.status} ${r.statusText || fallback}: ${text.slice(0, 300)}`
+    return `${r.status} ${r.statusText || fallback}`
+  }
 
   const save = async () => {
     if (!editing) return
@@ -71,7 +88,7 @@ export default function AAndDPage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editing),
       })
-      if (!res.ok) throw new Error((await res.json()).error || 'Save failed')
+      if (!res.ok) throw new Error(await readError(res, 'Save failed'))
       setMsg({ type: 'ok', text: editing.id ? 'Loan updated.' : 'Loan created.' })
       setEditing(null)
       await load()
@@ -85,7 +102,7 @@ export default function AAndDPage() {
     setBusy(true); setMsg(null)
     try {
       const res = await fetch(`/api/a-and-d-loans/${loan.id}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error((await res.json()).error || 'Delete failed')
+      if (!res.ok) throw new Error(await readError(res, 'Delete failed'))
       setMsg({ type: 'ok', text: `"${loan.name}" deleted.` })
       await load()
     } catch (e) {
@@ -160,6 +177,8 @@ export default function AAndDPage() {
           </table>
         </div>
       </div>
+
+      <ImportedAAndDCard forecast={forecast} />
 
       {editing && (
         <LoanEditor
@@ -477,12 +496,20 @@ function ProjectionCard({
   forecast: ForecastResult | null
   loanCount: number
 }) {
+  // One series per planned loan + a single aggregated 'Imported A&D' series
+  // so the chart stays readable even when there are many imported loans.
   const loanSeries = useMemo(() => {
     if (!forecast) return [] as { name: string; color: string }[]
     const names = [...forecast.a_and_d_schedules]
       .map(s => s.loan_name)
       .sort((a, b) => a.localeCompare(b))
-    return names.map((name, i) => ({ name, color: PROJECT_PALETTE[i % PROJECT_PALETTE.length] }))
+    const series = names.map((name, i) => ({
+      name, color: PROJECT_PALETTE[i % PROJECT_PALETTE.length],
+    }))
+    if (forecast.imported_a_and_d_schedules.length > 0) {
+      series.push({ name: 'Imported A&D', color: '#8B949E' })
+    }
+    return series
   }, [forecast])
 
   const chartData = useMemo(() => {
@@ -491,6 +518,13 @@ function ProjectionCard({
       const row: Record<string, number | string> = { label: m.label, month: m.month }
       for (const sch of forecast.a_and_d_schedules) {
         row[sch.loan_name] = sch.months[i]?.starting_balance ?? 0
+      }
+      if (forecast.imported_a_and_d_schedules.length > 0) {
+        let importedTotal = 0
+        for (const sch of forecast.imported_a_and_d_schedules) {
+          importedTotal += sch.months[i]?.starting_balance ?? 0
+        }
+        row['Imported A&D'] = importedTotal
       }
       return row
     })
@@ -512,6 +546,11 @@ function ProjectionCard({
         lotsCum         += row.lots_released_cum
         proceeds        += row.release_proceeds
       }
+      // Imported A&D loans contribute to the balance row only (no draws,
+      // releases, or lot accounting — they're treated flat until maturity).
+      for (const sch of forecast.imported_a_and_d_schedules) {
+        balance += sch.months[i]?.starting_balance ?? 0
+      }
       return {
         month: forecast.months[i].month,
         label: forecast.months[i].label,
@@ -520,7 +559,9 @@ function ProjectionCard({
     })
   }, [forecast])
 
-  if (!forecast || forecast.a_and_d_schedules.length === 0) {
+  const hasAnyData = forecast &&
+    (forecast.a_and_d_schedules.length > 0 || forecast.imported_a_and_d_schedules.length > 0)
+  if (!hasAnyData) {
     return (
       <div className="card fade-up fade-up-1.5 p-4">
         <div className="flex items-center gap-2 mb-1">
@@ -628,6 +669,61 @@ function Kpi({ label, value }: { label: string; value: string }) {
     <div>
       <div className="text-[10px] uppercase tracking-wide text-fg-dim mb-0.5">{label}</div>
       <div className="text-sm font-medium text-fg-strong font-mono">{value}</div>
+    </div>
+  )
+}
+
+// ─── Imported A&D loans (read-only) ─────────────────────────────────────────
+// Loans whose loan_type is 'A&D' on the active Current Report. The engine
+// continues to project them flat-until-maturity; this card just surfaces
+// them on the A&D tab for visibility next to the forward-planned loans.
+
+function ImportedAAndDCard({ forecast }: { forecast: ForecastResult | null }) {
+  if (!forecast || forecast.imported_a_and_d_schedules.length === 0) return null
+
+  const rows = [...forecast.imported_a_and_d_schedules]
+    .sort((a, b) => a.loan_name.localeCompare(b.loan_name))
+
+  return (
+    <div className="card fade-up fade-up-2">
+      <div className="card-header flex items-center justify-between">
+        <span className="card-title">Imported A&amp;D Loans · read-only</span>
+        <span className="text-[10px] text-fg-dim">
+          {rows.length} loan{rows.length === 1 ? '' : 's'} · loan_type = &lsquo;A&amp;D&rsquo; from the active Current Report
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Loan #</th>
+              <th>Name</th>
+              <th>Maturity</th>
+              <th className="text-right">Commitment</th>
+              <th className="text-right">Current Loan Amount</th>
+              <th className="text-right">Current Balance</th>
+              <th className="text-right">End of Horizon</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(s => {
+              const first = s.months[0]?.starting_balance ?? 0
+              const last  = s.months[s.months.length - 1]?.starting_balance ?? 0
+              return (
+                <tr key={s.loan_id}>
+                  <td className="text-fg font-mono text-[10px]">{s.loan_name}</td>
+                  <td className="text-fg">{s.imported_borrower || <span className="text-fg-dim">—</span>}</td>
+                  <td className="text-[10px] font-mono">{s.imported_maturity_date ?? '—'}</td>
+                  <td className="num">{formatCurrency(s.total_loan_amount, true)}</td>
+                  <td className="num">{formatCurrency(s.imported_current_loan_amount ?? 0, true)}</td>
+                  <td className="num">{formatCurrency(first, true)}</td>
+                  <td className="num">{formatCurrency(last, true)}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

@@ -196,6 +196,10 @@ export interface Builder {
   default_absorption_rate: number
   default_loan_program_id: string | null
   notes: string | null
+  // Builder → Parent Company (migration 013). The Dashboard parent filter
+  // uses this to slice every builder-attributed entity (Land Bucket,
+  // forecasted cohorts, HHH/JV, A&D planned).
+  parent_company_id: string | null
 }
 
 export interface LandBucketProject {
@@ -260,22 +264,40 @@ export interface BorrowerParentMapping {
   borrower: string
   parent_company_id: string
 }
-// Per-segment imported-loan balance for a single parent company in one month.
-// Forecasted cohorts, Land Bucket, HHH/JV, A&D planned are not included here
-// (the parent filter is borrowers-only per the design).
+// Per-parent breakdown for one month. Split into two halves:
+//   • imported-loan attribution (borrower → parent): sfr/mfr/and/raw_land/
+//     finished_lots/hhh and matching outstanding_<seg>.
+//   • builder-attribution (builder → parent): forecasted_<seg> for every new-
+//     origination cohort and the project-style entities (Land Bucket starting
+//     balance, HHH/JV balance, A&D planned balance).
+// Dashboard applyFilter sums the relevant subset per parent depending on
+// which chips and parents are active.
 export interface ByParentSegmentBalance {
+  // Imported loans (borrower → parent) — max committed
   sfr: number
   mfr: number
   and: number
   raw_land: number
   finished_lots: number
   hhh: number
+  // Imported loans, disbursed-with-maturity (the basis of Outstanding)
   outstanding_sfr: number
   outstanding_mfr: number
   outstanding_and: number
   outstanding_raw_land: number
   outstanding_finished_lots: number
   outstanding_hhh: number
+  // Forecasted new-origination cohort balances (builder → parent)
+  forecasted_sfr: number
+  forecasted_mfr: number
+  forecasted_and: number
+  forecasted_raw_land: number
+  forecasted_finished_lots: number
+  forecasted_hhh: number
+  // Project-style builder-attributed contributions
+  land_bucket: number       // sum of LB project starting_balance under this parent
+  hhh_jv_balance: number    // sum of HHH/JV project balance under this parent (folds into hhh)
+  a_and_d_planned: number   // sum of planned A&D loan balance under this parent (folds into and)
 }
 
 export interface AAndDLoan {

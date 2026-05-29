@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { StatCard } from '@/components/ui/StatCard'
 import { TotalBalanceChart, PortfolioStackedChart, IncomeChart, VarianceChart } from '@/components/charts/PortfolioCharts'
 import { ForecastResult, MonthlyBalance } from '@/lib/types'
@@ -436,20 +437,47 @@ function ParentCompanyDropdown({
   selected: Set<string> | null
   onChange: (s: Set<string> | null) => void
 }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const [open, setOpen]       = useState(false)
+  // Position is computed from the button's getBoundingClientRect on open
+  // (and on scroll/resize while open) and the popover renders via portal
+  // into document.body, so it can never be clipped by a parent .card's
+  // overflow-hidden or buried under sibling cards' stacking contexts.
+  const [pos, setPos]         = useState<{ top: number; right: number } | null>(null)
+  const buttonRef             = useRef<HTMLButtonElement>(null)
+  const popoverRef            = useRef<HTMLDivElement>(null)
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+
+  const reposition = () => {
+    const rect = buttonRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setPos({
+      top:   Math.round(rect.bottom + 4),
+      right: Math.round(window.innerWidth - rect.right),
+    })
+  }
 
   useEffect(() => {
     if (!open) return
+    reposition()
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (buttonRef.current?.contains(t)) return
+      if (popoverRef.current?.contains(t)) return
+      setOpen(false)
     }
-    const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    const onEsc      = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    const onResize   = () => reposition()
+    const onScroll   = () => reposition()
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onEsc)
+    window.addEventListener('resize', onResize)
+    window.addEventListener('scroll',  onScroll, true)  // capture = catch inner scrollers too
     return () => {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onEsc)
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('scroll',  onScroll, true)
     }
   }, [open])
 
@@ -480,50 +508,55 @@ function ParentCompanyDropdown({
   const selectAll = () => onChange(null)
   const selectNone = () => onChange(new Set())
 
+  const popover = open && pos && mounted ? createPortal(
+    <div ref={popoverRef}
+         style={{ position: 'fixed', top: pos.top, right: pos.right, zIndex: 1000 }}
+         className="w-64 bg-surface border border-border-strong rounded-lg shadow-xl max-h-80 overflow-y-auto">
+      <div className="px-2 py-1.5 border-b border-border flex items-center justify-between text-[10px] text-fg-dim">
+        <span>Parent companies</span>
+        <div className="flex items-center gap-1">
+          <button onClick={selectAll}  className="btn-ghost text-[10px] px-1.5 py-0.5">All</button>
+          <button onClick={selectNone} className="btn-ghost text-[10px] px-1.5 py-0.5">None</button>
+        </div>
+      </div>
+      {rows.length === 1 && rows[0].id === UNASSIGNED_PARENT_KEY ? (
+        <div className="text-[10px] text-fg-dim italic px-3 py-3">
+          No parent companies yet — add one on the Assumptions tab.
+        </div>
+      ) : rows.map(r => {
+        const on = selected === null ? true : selected.has(r.id)
+        return (
+          <button key={r.id}
+                  onClick={() => toggle(r.id)}
+                  className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs
+                             hover:bg-border/50 text-left">
+            <span className="flex items-center gap-2">
+              <span className={`w-3.5 h-3.5 inline-flex items-center justify-center rounded border
+                                ${on ? 'bg-accent border-accent text-accent-on' : 'border-border-strong'}`}>
+                {on && <Check className="w-2.5 h-2.5" />}
+              </span>
+              <span className={r.id === UNASSIGNED_PARENT_KEY ? 'text-fg-dim italic' : 'text-fg'}>
+                {r.name}
+              </span>
+            </span>
+            <span className="text-[10px] text-fg-dim font-mono">{r.count}</span>
+          </button>
+        )
+      })}
+    </div>,
+    document.body,
+  ) : null
+
   return (
-    <div className="relative" ref={ref}>
-      <button onClick={() => setOpen(o => !o)}
+    <>
+      <button ref={buttonRef} onClick={() => setOpen(o => !o)}
               className="btn-ghost text-[10px] inline-flex items-center gap-1.5">
         <Building2 className="w-3 h-3" />
         {label}
         <ChevronDown className="w-3 h-3" />
       </button>
-      {open && (
-        <div className="absolute right-0 mt-1 w-64 bg-surface border border-border-strong rounded-lg shadow-xl z-30 max-h-80 overflow-y-auto">
-          <div className="px-2 py-1.5 border-b border-border flex items-center justify-between text-[10px] text-fg-dim">
-            <span>Parent companies</span>
-            <div className="flex items-center gap-1">
-              <button onClick={selectAll}  className="btn-ghost text-[10px] px-1.5 py-0.5">All</button>
-              <button onClick={selectNone} className="btn-ghost text-[10px] px-1.5 py-0.5">None</button>
-            </div>
-          </div>
-          {rows.length === 1 && rows[0].id === UNASSIGNED_PARENT_KEY ? (
-            <div className="text-[10px] text-fg-dim italic px-3 py-3">
-              No parent companies yet — add one on the Assumptions tab.
-            </div>
-          ) : rows.map(r => {
-            const on = selected === null ? true : selected.has(r.id)
-            return (
-              <button key={r.id}
-                      onClick={() => toggle(r.id)}
-                      className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs
-                                 hover:bg-border/50 text-left">
-                <span className="flex items-center gap-2">
-                  <span className={`w-3.5 h-3.5 inline-flex items-center justify-center rounded border
-                                    ${on ? 'bg-accent border-accent text-accent-on' : 'border-border-strong'}`}>
-                    {on && <Check className="w-2.5 h-2.5" />}
-                  </span>
-                  <span className={r.id === UNASSIGNED_PARENT_KEY ? 'text-fg-dim italic' : 'text-fg'}>
-                    {r.name}
-                  </span>
-                </span>
-                <span className="text-[10px] text-fg-dim font-mono">{r.count}</span>
-              </button>
-            )
-          })}
-        </div>
-      )}
-    </div>
+      {popover}
+    </>
   )
 }
 

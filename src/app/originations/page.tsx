@@ -101,10 +101,14 @@ export default function OriginationsPage() {
     }
     setBusy(true); setMsg(null)
     try {
-      const url    = editing.id ? `/api/new-originations/${editing.id}` : '/api/new-originations'
-      const method = editing.id ? 'PUT' : 'POST'
+      // POST for both create AND update — Vercel rejects PUT with 405 on
+      // some setups (same fix as Land Bucket / A&D / etc.). The [id] route
+      // now exports a POST handler that performs the update.
+      const url = editing.id
+        ? `/api/new-originations/${editing.id}`
+        : '/api/new-originations'
       const res = await fetch(url, {
-        method, headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editing),
       })
       const text = await res.text()

@@ -355,14 +355,16 @@ function BuilderBlock({
                         ? <span className="text-fg-dim">{(prog.default_rate * 100).toFixed(2)}%</span>
                         : <span className="text-fg-dim">program</span>}
                   </td>
-                  <td className="flex gap-1">
-                    <button onClick={() => onEdit(e)} className="btn-ghost">
-                      <Pencil className="w-3 h-3" />
-                    </button>
-                    <button onClick={() => onDelete(e)} disabled={busy}
-                            className="btn-ghost text-danger">
-                      <Trash2 className="w-3 h-3" />
-                    </button>
+                  <td>
+                    <div className="flex gap-1 justify-end">
+                      <button onClick={() => onEdit(e)} className="btn-ghost" title="Edit entry">
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                      <button onClick={() => onDelete(e)} disabled={busy}
+                              className="btn-ghost text-danger" title="Delete entry">
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               )

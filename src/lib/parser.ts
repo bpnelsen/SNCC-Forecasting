@@ -197,6 +197,10 @@ export function parseCurrentReportWithDiagnostics(
       subdivision_name:         col.subdivision >= 0 ? String(row[col.subdivision] || '').trim() || null : null,
       projected_balance:        projected,
       loan_type:                classifyLoan(program, borrower, development),
+      // Defaults — overridden per-loan from the /loans page for FL loans.
+      // DB columns default to the same values for legacy rows.
+      number_of_lots:           1,
+      release_period_months:    12,
     })
   }
 

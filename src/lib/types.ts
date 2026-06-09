@@ -21,6 +21,13 @@ export interface Loan {
   subdivision_name: string | null
   projected_balance: number
   loan_type: LoanType
+  // Finished Lots / Multi-Lot Lot Loan release rule. Defaults: 1 lot,
+  // 12-month release horizon. Engine uses these only for loan_type ===
+  // 'FINISHED_LOTS' (calculator.ts): the loan is capped at current_loan_amount
+  // (never projected upward) and pays down by original_loan_amount /
+  // release_period_months per month, floored at 0 and zeroed past maturity.
+  number_of_lots: number
+  release_period_months: number
 }
 
 export interface CurrentReportVersion {

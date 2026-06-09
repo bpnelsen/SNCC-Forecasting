@@ -6,6 +6,12 @@ import { CreditCard, AlertCircle, Search, Filter } from 'lucide-react'
 import { Loan, LoanType } from '@/lib/types'
 import { formatCurrency } from '@/lib/utils'
 
+// Calendar months between two month-dates (signed, matches calculator.ts).
+function monthsBetween(from: Date, to: Date): number {
+  return (to.getFullYear() - from.getFullYear()) * 12 +
+         (to.getMonth() - from.getMonth())
+}
+
 // Product-type chips — same look as the dashboard's strip, but scoped to
 // this page. Land Bucket is intentionally absent: no loan_type maps to it.
 type FilterKey = 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh'
@@ -40,7 +46,25 @@ interface LoansResponse {
 //
 // "projected" is max(projected_balance, current_loan_amount, loan_amount_disbursed)
 // to guard against bad imports where one of those is zero.
+//
+// FINISHED_LOTS exception (matches calculator.ts): caps at current_loan_amount
+// (never pulled up by projected_balance) and pays down by original_loan_amount
+// / release_period_months per month from `today`.
 function loanMonthBalance(loan: Loan, monthDate: Date, today: Date): number {
+  if (loan.current_loan_due_date) {
+    const maturity = parseISO(loan.current_loan_due_date)
+    if (monthDate >= maturity) return 0
+  }
+
+  if (loan.loan_type === 'FINISHED_LOTS') {
+    const startBal = Math.max(loan.current_loan_amount, loan.loan_amount_disbursed, 0)
+    const horizon = loan.release_period_months || 0
+    if (horizon <= 0) return startBal
+    const perMonth = (loan.original_loan_amount || 0) / horizon
+    const i = Math.max(0, monthsBetween(today, monthDate))
+    return Math.max(0, startBal - i * perMonth)
+  }
+
   const start = loan.loan_amount_disbursed
   const projected = Math.max(
     loan.projected_balance,
@@ -52,8 +76,6 @@ function loanMonthBalance(loan: Loan, monthDate: Date, today: Date): number {
   if (!loan.current_loan_due_date) return projected
 
   const maturity = parseISO(loan.current_loan_due_date)
-  if (monthDate >= maturity) return 0
-
   const totalDays = differenceInCalendarDays(maturity, today)
   if (totalDays <= 0) return 0
   const elapsedDays = differenceInCalendarDays(monthDate, today)
@@ -68,6 +90,41 @@ export default function LoansPage() {
   const [error, setError]     = useState<string | null>(null)
   const [filter, setFilter]   = useState('')
   const [active, setActive]   = useState<Set<FilterKey>>(new Set(CHIPS.map(c => c.key)))
+  const [saving, setSaving]   = useState<Set<string>>(new Set())
+
+  // PATCH a single FL release field (number_of_lots | release_period_months)
+  // on blur. Optimistically updates the local cache so the projection columns
+  // recompute immediately; on failure we re-load to drop the bad value.
+  const patchLoan = async (
+    id: string,
+    field: 'number_of_lots' | 'release_period_months',
+    value: number,
+  ) => {
+    setData(prev => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        loans: prev.loans.map(l => l.id === id ? { ...l, [field]: value } : l),
+      }
+    })
+    setSaving(s => { const n = new Set(s); n.add(id); return n })
+    try {
+      const res = await fetch(`/api/loans/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: value }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        throw new Error(body?.error || `${res.status} ${res.statusText}`)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save')
+      await load()
+    } finally {
+      setSaving(s => { const n = new Set(s); n.delete(id); return n })
+    }
+  }
 
   const load = async () => {
     setLoading(true); setError(null)
@@ -210,6 +267,12 @@ export default function LoansPage() {
                 <th className="text-right">Remaining</th>
                 <th>Funded</th>
                 <th>Maturity</th>
+                <th className="text-right" title="Finished Lots only — number of lots collateralizing the loan">
+                  # Lots
+                </th>
+                <th className="text-right" title="Finished Lots only — months to release all lots (linear paydown)">
+                  Release (mo)
+                </th>
                 {months.map(m => (
                   <th key={m.key} className="text-right">{m.label}</th>
                 ))}
@@ -218,7 +281,7 @@ export default function LoansPage() {
             <tbody>
               {filteredLoans.length === 0 ? (
                 <tr>
-                  <td colSpan={9 + months.length} className="text-center text-xs text-fg-dim py-8">
+                  <td colSpan={11 + months.length} className="text-center text-xs text-fg-dim py-8">
                     {filter || chipsFiltered ? 'No loans match the current filter.' : 'No loans imported.'}
                   </td>
                 </tr>
@@ -235,6 +298,43 @@ export default function LoansPage() {
                   <td className="num">{formatCurrency(loan.loan_amount_remaining, true)}</td>
                   <td className="text-[10px] font-mono">{loan.loan_funded_date ?? '—'}</td>
                   <td className="text-[10px] font-mono">{loan.current_loan_due_date ?? '—'}</td>
+                  {loan.loan_type === 'FINISHED_LOTS' && loan.id ? (
+                    <>
+                      <td className="num">
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          defaultValue={loan.number_of_lots}
+                          disabled={saving.has(loan.id)}
+                          onBlur={e => {
+                            const n = Math.max(1, Math.floor(Number(e.target.value) || 1))
+                            if (n !== loan.number_of_lots) patchLoan(loan.id!, 'number_of_lots', n)
+                          }}
+                          className="form-input text-[10px] w-16 py-0.5 px-1 text-right"
+                        />
+                      </td>
+                      <td className="num">
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          defaultValue={loan.release_period_months}
+                          disabled={saving.has(loan.id)}
+                          onBlur={e => {
+                            const n = Math.max(0, Math.floor(Number(e.target.value) || 0))
+                            if (n !== loan.release_period_months) patchLoan(loan.id!, 'release_period_months', n)
+                          }}
+                          className="form-input text-[10px] w-16 py-0.5 px-1 text-right"
+                        />
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td className="num text-fg-dim">—</td>
+                      <td className="num text-fg-dim">—</td>
+                    </>
+                  )}
                   {months.map(m => {
                     const bal = loanMonthBalance(loan, m.date, today)
                     const isPostMaturity = !!loan.current_loan_due_date && m.date >= parseISO(loan.current_loan_due_date)
@@ -251,7 +351,7 @@ export default function LoansPage() {
                   <td className="sticky left-0 z-10 bg-accent/10 uppercase text-[10px] tracking-wide">
                     Grand total
                   </td>
-                  <td colSpan={8} className="text-[10px] text-fg-dim">
+                  <td colSpan={10} className="text-[10px] text-fg-dim">
                     {filteredLoans.length} loan{filteredLoans.length === 1 ? '' : 's'}
                     {(filter || chipsFiltered) && ` (filtered from ${data.loans.length})`}
                   </td>
@@ -265,9 +365,15 @@ export default function LoansPage() {
         </div>
       </div>
 
-      <div className="text-[10px] text-fg-dim italic px-1">
-        First month uses each loan's <code>loan_amount_disbursed</code>; later months interpolate linearly toward
-        max(<code>projected_balance</code>, <code>current_loan_amount</code>, <code>loan_amount_disbursed</code>); the maturity month and beyond are zero.
+      <div className="text-[10px] text-fg-dim italic px-1 space-y-0.5">
+        <div>
+          First month uses each loan's <code>loan_amount_disbursed</code>; later months interpolate linearly toward
+          max(<code>projected_balance</code>, <code>current_loan_amount</code>, <code>loan_amount_disbursed</code>); the maturity month and beyond are zero.
+        </div>
+        <div>
+          <strong>Finished Lots / Multi-Lot Lot Loan:</strong> capped at <code>current_loan_amount</code> (never increases) and pays down by
+          <code> original_loan_amount ÷ Release (mo)</code> each month. Set Release to 0 to hold flat until maturity.
+        </div>
       </div>
     </div>
   )

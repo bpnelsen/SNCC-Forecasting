@@ -208,6 +208,24 @@ function runLandBucket(
 
 // ─── Module 2: Vertical Loan Engine ──────────────────────────────────────────
 
+// Months between two month-of-year dates (calendar months, signed).
+function monthsBetween(from: Date, to: Date): number {
+  return (to.getFullYear() - from.getFullYear()) * 12 +
+         (to.getMonth() - from.getMonth())
+}
+
+// Finished Lots / Multi-Lot Lot Loan release rule. Returns the principal
+// released by month index `i` (months since the forecast start). Per-month
+// decrement = original_loan_amount / release_period_months — same math whether
+// you think of it as "1/H of the loan" or "(lots/H) × (OLA/lots) per month".
+function finishedLotsReleasedByMonth(loan: Loan, i: number): number {
+  if (loan.loan_type !== 'FINISHED_LOTS') return 0
+  const horizon = loan.release_period_months || 0
+  if (horizon <= 0) return 0
+  const perMonth = (loan.original_loan_amount || 0) / horizon
+  return Math.max(0, i) * perMonth
+}
+
 // Existing portfolio loan balance for a given forecast month.
 //
 // Every loan contributes its actual recorded max balance to the portfolio
@@ -216,16 +234,26 @@ function runLandBucket(
 // the books — the draw curve is for brand-new cohorts originated from land
 // bucket lot sales, which legitimately start at $0 and ramp.
 //
+// FINISHED_LOTS exception: caps at current_loan_amount (never pulled up by
+// projected_balance) and pays down linearly by original_loan_amount /
+// release_period_months per month from the forecast start. Migration 015.
+//
 // Returns 0 once the loan matures (monthDate >= current_loan_due_date).
 function projectExistingLoanBalance(
   loan: Loan,
   monthDate: Date,
   _programs: LoanProgram[],
-  _startDate: Date,
+  startDate: Date,
 ): number {
   if (loan.current_loan_due_date) {
     const dueDate = parseISO(loan.current_loan_due_date)
     if (monthDate >= dueDate) return 0
+  }
+
+  if (loan.loan_type === 'FINISHED_LOTS') {
+    const start = Math.max(loan.current_loan_amount, loan.loan_amount_disbursed, 0)
+    const i = monthsBetween(startDate, monthDate)
+    return Math.max(0, start - finishedLotsReleasedByMonth(loan, i))
   }
 
   const maxAmount = Math.max(
@@ -239,10 +267,16 @@ function projectExistingLoanBalance(
 // Outstanding (cash actually drawn) for an existing loan. Same maturity gate
 // as projectExistingLoanBalance, but valued at loan_amount_disbursed instead
 // of the committed/face amount — held flat until the loan matures, then 0.
-function projectExistingLoanOutstanding(loan: Loan, monthDate: Date): number {
+// FINISHED_LOTS: same linear paydown as projectExistingLoanBalance.
+function projectExistingLoanOutstanding(loan: Loan, monthDate: Date, startDate: Date): number {
   if (loan.current_loan_due_date) {
     const dueDate = parseISO(loan.current_loan_due_date)
     if (monthDate >= dueDate) return 0
+  }
+  if (loan.loan_type === 'FINISHED_LOTS') {
+    const start = Math.max(loan.loan_amount_disbursed, loan.current_loan_amount, 0)
+    const i = monthsBetween(startDate, monthDate)
+    return Math.max(0, start - finishedLotsReleasedByMonth(loan, i))
   }
   return loan.loan_amount_disbursed > 0 ? loan.loan_amount_disbursed : 0
 }
@@ -673,7 +707,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     // Outstanding (drawn) per segment: existing loans valued at disbursed
     // (decays at maturity) + forecasted cohorts (already a drawn balance).
     const sumExistingOut = (loans: Loan[]) =>
-      loans.reduce((s, l) => s + projectExistingLoanOutstanding(l, m.date), 0)
+      loans.reduce((s, l) => s + projectExistingLoanOutstanding(l, m.date, startDate), 0)
     const outstanding_sfr           = sumExistingOut(loansByType.SFR)           + newBySegment.sfr
     const outstanding_mfr           = sumExistingOut(loansByType.MFR)           + newBySegment.mfr
     const outstanding_and           = sumExistingOut(loansByType['A&D'])        + newBySegment.and + aAndDPlanned

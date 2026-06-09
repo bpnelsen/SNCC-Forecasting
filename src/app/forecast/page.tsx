@@ -29,6 +29,10 @@ function sliceMonth(m: MonthlyBalance, active: Set<FilterKey>) {
   let newOrigAmount = 0
   let forecastedTotal = 0
   let activePortfolio = 0
+  // Drawn/outstanding loan balance and per-segment payoffs both follow the
+  // chip filter so the new columns line up with the rest of the row.
+  let currentLoanBalance = 0
+  let payoffsAmount = 0
   for (const k of PRODUCT_KEYS) {
     if (!active.has(k)) continue
     newOrigCount     += m.new_origs_by_segment[k].count
@@ -45,15 +49,24 @@ function sliceMonth(m: MonthlyBalance, active: Set<FilterKey>) {
                       : k === 'raw_land'      ? m.raw_land
                       : k === 'finished_lots' ? m.finished_lots
                       :                          m.hhh
+    currentLoanBalance += k === 'sfr'           ? m.outstanding_sfr
+                       :  k === 'mfr'           ? m.outstanding_mfr
+                       :  k === 'and'           ? m.outstanding_and
+                       :  k === 'raw_land'      ? m.outstanding_raw_land
+                       :  k === 'finished_lots' ? m.outstanding_finished_lots
+                       :                           m.outstanding_hhh
+    payoffsAmount    += m.payoffs_by_segment?.[k] ?? 0
   }
   const grandTotal = activePortfolio + (active.has('land_bucket') ? m.land_bucket : 0)
   return {
     newOrigCount,
     newOrigAmount,
+    payoffsAmount,
     fcstSfr:        active.has('sfr') ? m.forecasted_sfr : 0,
     fcstMfr:        active.has('mfr') ? m.forecasted_mfr : 0,
     forecastedTotal,
     activePortfolio,
+    currentLoanBalance,
     grandTotal,
   }
 }
@@ -141,10 +154,12 @@ export default function ForecastPage() {
                 <th>Month</th>
                 <th className="text-right">New Orig (#)</th>
                 <th className="text-right">New Orig $</th>
+                <th className="text-right">Payoffs</th>
                 <th className="text-right">Fcst SFR</th>
                 <th className="text-right">Fcst MFR</th>
                 <th className="text-right">Total Fcst</th>
                 <th className="text-right">Active Portfolio</th>
+                <th className="text-right">Current Loan Balance</th>
                 <th className="text-right">Grand Total</th>
                 <th className="text-right">Monthly Income</th>
                 <th className="text-right">Ann. Yield</th>
@@ -158,10 +173,14 @@ export default function ForecastPage() {
                     <td className="text-fg font-medium">{m.label}</td>
                     <td className="num">{s.newOrigCount || '—'}</td>
                     <td className="num">{s.newOrigAmount ? formatCurrency(s.newOrigAmount, true) : '—'}</td>
+                    <td className="num text-danger">
+                      {s.payoffsAmount ? `−${formatCurrency(s.payoffsAmount, true)}` : '—'}
+                    </td>
                     <td className="num text-success-bright">{formatCurrency(s.fcstSfr, true)}</td>
                     <td className="num text-success-bright">{formatCurrency(s.fcstMfr, true)}</td>
                     <td className="num font-medium">{formatCurrency(s.forecastedTotal, true)}</td>
                     <td className="num">{formatCurrency(s.activePortfolio, true)}</td>
+                    <td className="num">{formatCurrency(s.currentLoanBalance, true)}</td>
                     <td className="num font-medium text-accent">{formatCurrency(s.grandTotal, true)}</td>
                     <td className="num text-accent">{formatCurrency(m.total_income, true)}</td>
                     <td className="num">{formatPct(m.annualized_yield_pct)}</td>

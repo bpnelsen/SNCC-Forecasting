@@ -818,6 +818,9 @@ export function runForecast(input: ForecastInput): ForecastResult {
     // Payoff detection: existing loan whose balance transitioned to 0
     let payoffs_count = 0
     let payoffs_amount = 0
+    const payoffs_by_segment: Record<Segment, number> = {
+      sfr: 0, mfr: 0, and: 0, raw_land: 0, finished_lots: 0, hhh: 0,
+    }
     for (const loan of input.loans) {
       const key = loan.id ?? loan.loan_number
       const curr = projectExistingLoanBalance(loan, m.date, input.loanPrograms, startDate)
@@ -825,6 +828,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
       if (i > 0 && prev > 0 && curr === 0) {
         payoffs_count += 1
         payoffs_amount += prev
+        payoffs_by_segment[loanTypeToSegment[loan.loan_type]] += prev
       }
       prevExistingBalances.set(key, curr)
     }
@@ -832,7 +836,9 @@ export function runForecast(input: ForecastInput): ForecastResult {
     for (const orig of allOriginations) {
       if (i - orig.origination_month_idx === orig.program.default_term_months) {
         payoffs_count += orig.count
-        payoffs_amount += orig.count * orig.max_amount_per_loan
+        const amount = orig.count * orig.max_amount_per_loan
+        payoffs_amount += amount
+        payoffs_by_segment[PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]] += amount
       }
     }
 
@@ -891,6 +897,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
         lb.totals[i].new_vertical_origs_amount + (scheduledByMonthIdx.get(i)?.amount ?? 0),
       payoffs_count,
       payoffs_amount,
+      payoffs_by_segment,
       cash_flow,
     })
   }

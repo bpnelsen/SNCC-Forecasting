@@ -141,6 +141,17 @@ export interface MonthlyBalance {
   new_originations_amount: number
   payoffs_count: number
   payoffs_amount: number
+  // Per-segment breakdown of payoffs_amount so the Forecast page can filter
+  // the Payoffs column by the product-type chip strip. Includes both imported
+  // loan maturities AND forecasted cohort payoffs at end-of-term.
+  payoffs_by_segment: {
+    sfr: number
+    mfr: number
+    and: number
+    raw_land: number
+    finished_lots: number
+    hhh: number
+  }
   cash_flow: number
 }
 

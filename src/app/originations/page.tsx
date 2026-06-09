@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import {
-  ClipboardList, Plus, Save, Trash2, X, AlertCircle, CheckCircle, Pencil,
+  ClipboardList, Plus, Save, Trash2, X, AlertCircle, CheckCircle, Pencil, ChevronDown, ChevronRight,
 } from 'lucide-react'
 import { Builder, LoanProgram, LandBucketProject, NewOriginationEntry } from '@/lib/types'
 import { formatCurrency } from '@/lib/utils'
@@ -674,6 +674,9 @@ function DrawCurveShortcut({
 }) {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg]   = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+  // Collapsed by default — the per-month grids are bulky and most page
+  // visits don't need to edit the curve. Click the header to expand.
+  const [open, setOpen] = useState(false)
 
   const targets = programs.filter(p => p.name === 'SFR Construction' || p.name === 'MFR Construction')
 
@@ -717,36 +720,61 @@ function DrawCurveShortcut({
     )
   }
 
+  // Header summary so the collapsed state still tells you what's inside.
+  const summary = targets
+    .map(p => `${p.name.replace(' Construction', '')}: ${p.draw_curve.length} mo · ${Math.round(p.draw_curve.reduce((a, b) => a + b, 0) * 100)}%`)
+    .join(' · ')
+
   return (
     <div className="card fade-up fade-up-1.5">
-      <div className="card-header flex items-center justify-between">
-        <span className="card-title">SFR / MFR Construction Draw Curves</span>
-        <button onClick={save} disabled={busy} className="btn-primary text-[10px]">
-          <Save className="w-3 h-3" /> {busy ? 'Saving…' : 'Save Curves'}
-        </button>
-      </div>
-
-      <div className="p-4 space-y-4">
-        <p className="text-[10px] text-fg-dim">
-          Shortcut to the same loan-program rows you'd edit on Assumptions. Changes
-          apply to every New Originations entry assigned to that program.
-        </p>
-
-        {msg && (
-          <div className={`flex items-center gap-2 text-xs p-2 rounded border ${
-            msg.type === 'ok'
-              ? 'bg-success/10 border-success/30 text-success-light'
-              : 'bg-danger-strong/10 border-danger-strong/30 text-danger'
-          }`}>
-            {msg.type === 'ok' ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
-            {msg.text}
-          </div>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="w-full card-header flex items-center justify-between hover:bg-border/30 transition-colors"
+        aria-expanded={open}
+      >
+        <span className="flex items-center gap-2">
+          {open ? <ChevronDown className="w-3.5 h-3.5 text-fg-dim" /> : <ChevronRight className="w-3.5 h-3.5 text-fg-dim" />}
+          <span className="card-title">SFR / MFR Construction Draw Curves</span>
+          {!open && <span className="text-[10px] text-fg-dim font-mono ml-2">{summary}</span>}
+        </span>
+        {open && (
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={e => { e.stopPropagation(); save() }}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); save() } }}
+            aria-disabled={busy}
+            className={`btn-primary text-[10px] ${busy ? 'opacity-60 cursor-not-allowed' : ''}`}
+          >
+            <Save className="w-3 h-3" /> {busy ? 'Saving…' : 'Save Curves'}
+          </span>
         )}
+      </button>
 
-        {targets.map(p => (
-          <DrawCurveGrid key={p.id} program={p} onChange={curve => patch(p.id, curve)} />
-        ))}
-      </div>
+      {open && (
+        <div className="p-4 space-y-4 border-t border-border">
+          <p className="text-[10px] text-fg-dim">
+            Shortcut to the same loan-program rows you'd edit on Assumptions. Changes
+            apply to every New Originations entry assigned to that program.
+          </p>
+
+          {msg && (
+            <div className={`flex items-center gap-2 text-xs p-2 rounded border ${
+              msg.type === 'ok'
+                ? 'bg-success/10 border-success/30 text-success-light'
+                : 'bg-danger-strong/10 border-danger-strong/30 text-danger'
+            }`}>
+              {msg.type === 'ok' ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+              {msg.text}
+            </div>
+          )}
+
+          {targets.map(p => (
+            <DrawCurveGrid key={p.id} program={p} onChange={curve => patch(p.id, curve)} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

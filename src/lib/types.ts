@@ -324,6 +324,26 @@ export interface ByParentSegmentBalance {
   a_and_d_planned: number   // sum of planned A&D loan balance under this parent (folds into and)
 }
 
+// Committee-approved loans that haven't closed yet. Free-form pipeline tracker
+// rendered by /approved. "Days left" is computed in the UI as
+// lc_approval_expiration - today, not stored. See migration 016.
+export type ApprovedLoanType   = 'Vertical' | 'A&D' | 'Finished Lots' | 'Land' | 'Other'
+export type ApprovedLoanStatus = 'Open' | 'Closed' | 'Expired' | 'Cancelled'
+
+export interface ApprovedLoan {
+  id: string
+  loan_type: ApprovedLoanType
+  date_approved: string | null
+  borrower_project_name: string
+  lc_approval_expiration: string | null
+  status: ApprovedLoanStatus
+  date_completed: string | null
+  disposition_notes: string | null
+  next_steps_notes: string | null
+  loan_amount: number
+  sort_order: number
+}
+
 export interface AAndDLoan {
   id: string
   name: string

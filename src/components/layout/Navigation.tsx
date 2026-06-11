@@ -3,13 +3,14 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
-  LayoutDashboard, TrendingUp, Settings2, Upload, History, Building2, Landmark, ClipboardList, CreditCard, Handshake, HardHat,
+  LayoutDashboard, TrendingUp, Settings2, Upload, History, Building2, Landmark, ClipboardList, CreditCard, Handshake, HardHat, ClipboardCheck,
 } from 'lucide-react'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
 
 const nav = [
   { href: '/dashboard',    label: 'Dashboard',       icon: LayoutDashboard },
   { href: '/loans',        label: 'Loans',           icon: CreditCard },
+  { href: '/approved',     label: 'Approved Loans',  icon: ClipboardCheck },
   { href: '/forecast',     label: 'Forecast',        icon: TrendingUp },
   { href: '/originations', label: 'New Originations', icon: ClipboardList },
   { href: '/land-bucket',  label: 'Land Bucket',     icon: Landmark },

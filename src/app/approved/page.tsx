@@ -433,11 +433,12 @@ export default function ApprovedLoansPage() {
       <div className="text-[9px] text-fg-dim italic px-1 space-y-0.5">
         <div>
           Days = LC approval expiration date − today ({format(new Date(), 'd-MMM yyyy')}).
-          Negative values mean the approval has already expired. Edit any cell — saves on blur.
+          Negative values are flagged in red but the row stays <strong>Open</strong> — loans are never auto-closed.
+          Edit any cell — saves on blur.
         </div>
         <div>
           Setting <strong>Date Approved</strong> auto-fills <strong>LC Exp.</strong> to Date Approved + 90 days (still editable for extensions).
-          Setting <strong>Status</strong> to Closed auto-fills <strong>Date Completed</strong> with today's date (if blank) and removes the row from view —
+          Setting <strong>Status</strong> to Closed (the only way a row closes) auto-fills <strong>Date Completed</strong> with today's date if blank, then removes the row from view —
           toggle the Closed chip to bring it back.
         </div>
       </div>

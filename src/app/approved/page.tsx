@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { format, parseISO, differenceInCalendarDays } from 'date-fns'
+import { format, parseISO, differenceInCalendarDays, addDays } from 'date-fns'
 import {
   ClipboardCheck, Plus, Trash2, AlertCircle, CheckCircle, Filter,
 } from 'lucide-react'
@@ -101,10 +101,25 @@ export default function ApprovedLoansPage() {
     })
   }
 
-  // Partial PATCH. When Status flips to Closed and Date Completed is blank,
-  // stamp today's date in the same request so the column auto-fills.
+  // Partial PATCH. Two auto-fill rules:
+  //   1. Date Approved set → LC Approval Expiration becomes Date Approved + 90 days
+  //      (the LC approval window is always 90 days; user can still override).
+  //   2. Status → Closed (with a blank Date Completed) → stamp today's date.
+  // Both rules apply in the same request so the partial update writes the
+  // computed sibling alongside the field the user actually edited.
   const patch = async (id: string, field: keyof ApprovedLoan, value: unknown) => {
     const extras: Partial<ApprovedLoan> = {}
+    if (field === 'date_approved') {
+      if (value && typeof value === 'string') {
+        const dApp = parseISO(value)
+        if (!isNaN(dApp.getTime())) {
+          extras.lc_approval_expiration = format(addDays(dApp, 90), 'yyyy-MM-dd')
+        }
+      } else {
+        // Date Approved cleared → expiration is meaningless; clear it too.
+        extras.lc_approval_expiration = null
+      }
+    }
     if (field === 'status' && value === 'Closed') {
       const current = rows.find(r => r.id === id)
       if (current && !current.date_completed) {
@@ -315,7 +330,11 @@ export default function ApprovedLoansPage() {
                       {d == null ? '—' : d}
                     </td>
                     <td className="px-1 py-0.5">
+                      {/* key includes lc_approval_expiration so the auto-derived
+                          "Date Approved + 90 days" value remounts the input
+                          when Date Approved is patched. */}
                       <CellInput
+                        key={`exp-${row.id}-${row.lc_approval_expiration ?? ''}`}
                         type="date"
                         defaultValue={row.lc_approval_expiration ?? ''}
                         onCommit={v => patch(row.id, 'lc_approval_expiration', v || null)}
@@ -417,8 +436,9 @@ export default function ApprovedLoansPage() {
           Negative values mean the approval has already expired. Edit any cell — saves on blur.
         </div>
         <div>
-          Setting Status to <strong>Closed</strong> auto-fills Date Completed with today's date (if blank) and removes the row from view.
-          Toggle the <strong>Closed</strong> chip above to bring closed rows back.
+          Setting <strong>Date Approved</strong> auto-fills <strong>LC Exp.</strong> to Date Approved + 90 days (still editable for extensions).
+          Setting <strong>Status</strong> to Closed auto-fills <strong>Date Completed</strong> with today's date (if blank) and removes the row from view —
+          toggle the Closed chip to bring it back.
         </div>
       </div>
     </div>

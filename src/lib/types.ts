@@ -328,7 +328,7 @@ export interface ByParentSegmentBalance {
 // rendered by /approved. "Days left" is computed in the UI as
 // lc_approval_expiration - today, not stored. See migration 016.
 export type ApprovedLoanType   = 'Vertical' | 'A&D' | 'Finished Lots' | 'Land' | 'Other'
-export type ApprovedLoanStatus = 'Open' | 'Closed' | 'Expired' | 'Cancelled'
+export type ApprovedLoanStatus = 'Open' | 'Closed'
 
 export interface ApprovedLoan {
   id: string

@@ -1,12 +1,13 @@
 import * as XLSX from 'xlsx'
 import { Loan, LoanType } from './types'
 
-function classifyLoan(program: string, borrower: string, development: string): LoanType {
+function classifyLoan(program: string, _borrower: string, _development: string): LoanType {
   const p = (program || '').toLowerCase()
-  const b = (borrower || '').toLowerCase()
-  const d = (development || '').toLowerCase()
+  // Classification is program-only. Borrower-name overrides (an earlier
+  // "Holmes → HHH/JV" shortcut) were removed: parent-company attribution
+  // owns the borrower→parent mapping now, and the HHH/JV dashboard segment
+  // is sourced strictly from the manual /hhh-jv tab, not from imported loans.
 
-  if (b.includes('holmes') || d.includes('oquirrh')) return 'HHH'
   if (p.includes('multifamily') || p.includes('multi-family') || p.includes(' mf')) return 'MFR'
   if (p.includes('raw land') || p.includes('raw')) return 'RAW_LAND'
   if (p.includes('acquisition') || p.includes('a&d') || p.includes('development loan')) return 'A&D'

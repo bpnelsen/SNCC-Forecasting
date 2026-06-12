@@ -664,7 +664,12 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const and_existing = sumExisting(loansByType['A&D'])
     const raw_existing = sumExisting(loansByType.RAW_LAND)
     const fl_existing = sumExisting(loansByType.FINISHED_LOTS)
-    const hhh_existing = sumExisting(loansByType.HHH) + sumExisting(loansByType.UNKNOWN)
+    // HHH/JV segment is sourced strictly from the manual /hhh-jv tab + any
+    // forecasted hhh cohorts. Imported loans never contribute here, even if
+    // a legacy row is still typed HHH or UNKNOWN (migration 017 reclassifies
+    // those by program). Keeps the dashboard HHH/JV tile equal to the sum
+    // of HHH/JV project balances.
+    const hhh_existing = 0
 
     // Lot-driven new originations distributed by program product_type
     const newBySegment: Record<Segment, number> = {
@@ -713,8 +718,8 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const outstanding_and           = sumExistingOut(loansByType['A&D'])        + newBySegment.and + aAndDPlanned
     const outstanding_raw_land      = sumExistingOut(loansByType.RAW_LAND)      + newBySegment.raw_land
     const outstanding_finished_lots = sumExistingOut(loansByType.FINISHED_LOTS) + newBySegment.finished_lots
-    const outstanding_hhh           = sumExistingOut(loansByType.HHH) +
-                                      sumExistingOut(loansByType.UNKNOWN) + newBySegment.hhh + hhhJv
+    // HHH/JV outstanding mirrors hhh_existing: hhh_jv_projects + forecasted only.
+    const outstanding_hhh           = newBySegment.hhh + hhhJv
 
     // Per-parent breakdown for the month. Splits into:
     //   • imported-loan attribution (borrower → parent) for sfr/mfr/etc.
@@ -784,7 +789,10 @@ export function runForecast(input: ForecastInput): ForecastResult {
         and:           segs ? sumExisting(segs.and)           : 0,
         raw_land:      segs ? sumExisting(segs.raw_land)      : 0,
         finished_lots: segs ? sumExisting(segs.finished_lots) : 0,
-        hhh:           segs ? sumExisting(segs.hhh)           : 0,
+        // Per-parent hhh slot intentionally excludes imported loan
+        // attribution so the dashboard's per-parent HHH/JV matches the
+        // global HHH/JV segment (manual tab + forecasted only).
+        hhh:           0,
         // outstanding_<seg> rolls in the matching builder-attributed contributions
         // so the Outstanding tile / Total Outstanding rows can sum per parent
         // without consulting the forecasted / planned / hhh-jv maps separately.
@@ -793,7 +801,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
         outstanding_and:           (segs ? sumExistingOut(segs.and)           : 0) + fcst.and + aad_p,
         outstanding_raw_land:      (segs ? sumExistingOut(segs.raw_land)      : 0) + fcst.raw_land,
         outstanding_finished_lots: (segs ? sumExistingOut(segs.finished_lots) : 0) + fcst.finished_lots,
-        outstanding_hhh:           (segs ? sumExistingOut(segs.hhh)           : 0) + fcst.hhh + hhh_p,
+        outstanding_hhh:           fcst.hhh + hhh_p,
         forecasted_sfr:           fcst.sfr,
         forecasted_mfr:           fcst.mfr,
         forecasted_and:           fcst.and,
@@ -948,7 +956,9 @@ export function runForecast(input: ForecastInput): ForecastResult {
       and:           sumDisbursed(loansByType['A&D']),
       raw_land:      sumDisbursed(loansByType.RAW_LAND),
       finished_lots: sumDisbursed(loansByType.FINISHED_LOTS),
-      hhh:           sumDisbursed(loansByType.HHH) + sumDisbursed(loansByType.UNKNOWN),
+      // Active-loans tile excludes HHH-typed and UNKNOWN imported loans —
+      // dashboard HHH/JV is the manual /hhh-jv tab's domain.
+      hhh:           0,
       total:         input.loans.reduce((s, l) => s + (l.loan_amount_disbursed || 0), 0),
     },
     current_balances: {

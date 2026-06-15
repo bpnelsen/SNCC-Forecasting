@@ -298,7 +298,13 @@ export default function DashboardPage() {
               {months[0]?.label} → {months[months.length - 1]?.label}
             </span>
           </div>
-          <div className="p-4"><TotalBalanceChart data={months} /></div>
+          {/* $125M Y-axis floor on the unfiltered view gives more depth to
+              month-over-month movement; any active filter (product chips or
+              parent) drops the floor back to 0 so smaller filtered totals
+              still fit on the chart. */}
+          <div className="p-4">
+            <TotalBalanceChart data={months} yAxisFloor={filtered ? 0 : 125_000_000} />
+          </div>
         </div>
 
         <div className="card">

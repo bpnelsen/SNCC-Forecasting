@@ -687,12 +687,20 @@ export function runForecast(input: ForecastInput): ForecastResult {
       finished_lots: { count: 0, amount: 0 },
       hhh:           { count: 0, amount: 0 },
     }
-    for (const orig of allOriginations) {
+    // Count / amount of new originations for the Forecast page's New Orig (#)
+    // and New Orig $ columns. Scheduled-only — Land Bucket-spawned vertical
+    // cohorts are a side-effect of lot sales rather than originations the
+    // user committed to, so they're excluded from these tallies. The balance
+    // loop below still walks allOriginations, so LB-driven cohorts continue
+    // to feed the segment balance / forecasted_<seg> figures unchanged.
+    for (const orig of scheduledOriginations) {
       if (orig.origination_month_idx === i) {
         const seg = PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]
         newOrigsBySeg[seg].count  += orig.count
         newOrigsBySeg[seg].amount += orig.count * orig.max_amount_per_loan
       }
+    }
+    for (const orig of allOriginations) {
       const bal = lotOriginationBalance(orig, i)
       if (bal === 0) continue
       newBySegment[PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]] += bal

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { ForecastResult, MonthlyBalance, OriginationProjectDetail } from '@/lib/types'
-import { formatCurrency, formatPct } from '@/lib/utils'
+import { formatCurrency } from '@/lib/utils'
 import { TrendingUp, AlertCircle, Filter } from 'lucide-react'
 
 // Product-type chips — same set as the dashboard so the two pages filter
@@ -180,8 +180,6 @@ export default function ForecastPage() {
                 <th className="text-right">Active Portfolio</th>
                 <th className="text-right">Current Loan Balance</th>
                 <th className="text-right">Grand Total</th>
-                <th className="text-right">Monthly Income</th>
-                <th className="text-right">Ann. Yield</th>
               </tr>
             </thead>
             <tbody>
@@ -201,8 +199,6 @@ export default function ForecastPage() {
                     <td className="num">{formatCurrency(s.activePortfolio, true)}</td>
                     <td className="num">{formatCurrency(s.currentLoanBalance, true)}</td>
                     <td className="num font-medium text-accent">{formatCurrency(s.grandTotal, true)}</td>
-                    <td className="num text-accent">{formatCurrency(m.total_income, true)}</td>
-                    <td className="num">{formatPct(m.annualized_yield_pct)}</td>
                   </tr>
                 )
               })}

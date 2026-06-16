@@ -17,7 +17,9 @@ function monthsBetween(from: Date, to: Date): number {
 type FilterKey = 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh'
 
 const CHIPS: { key: FilterKey; label: string; color: string; types: LoanType[] }[] = [
-  { key: 'sfr',           label: 'SFR',           color: '#58A6FF', types: ['SFR'] },
+  // OTC (One-Time Close) tags ride the SFR chip — its own loan_type so analysts
+  // can spot it in the Type column, but rolled into SFR everywhere else.
+  { key: 'sfr',           label: 'SFR',           color: '#58A6FF', types: ['SFR', 'OTC'] },
   { key: 'mfr',           label: 'MFR',           color: '#D4A853', types: ['MFR'] },
   { key: 'and',           label: 'A&D',           color: '#3FB950', types: ['A&D'] },
   { key: 'raw_land',      label: 'Raw Land',      color: '#8B949E', types: ['RAW_LAND'] },

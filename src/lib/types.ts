@@ -1,4 +1,4 @@
-export type LoanType = 'SFR' | 'MFR' | 'RAW_LAND' | 'A&D' | 'FINISHED_LOTS' | 'HHH' | 'UNKNOWN'
+export type LoanType = 'SFR' | 'MFR' | 'RAW_LAND' | 'A&D' | 'FINISHED_LOTS' | 'HHH' | 'OTC' | 'UNKNOWN'
 
 export interface Loan {
   id?: string

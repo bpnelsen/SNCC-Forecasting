@@ -7,11 +7,21 @@ function classifyLoan(program: string, _borrower: string, _development: string):
   // "Holmes → HHH/JV" shortcut) were removed: parent-company attribution
   // owns the borrower→parent mapping now, and the HHH/JV dashboard segment
   // is sourced strictly from the manual /hhh-jv tab, not from imported loans.
+  //
+  // Rule order matters — earlier rules win. Two known special cases:
+  //   * "Land Acquisition" → RAW_LAND (was hitting UNKNOWN before)
+  //   * "Memorial Investments" → A&D (program-named, not a borrower)
+  //   * "OTC" (One-Time Close) → its own loan_type; rolls into the SFR
+  //     segment for dashboards / charts but keeps an OTC tag on /loans.
+  //     Must beat the generic SFR/construction rules below.
 
   if (p.includes('multifamily') || p.includes('multi-family') || p.includes(' mf')) return 'MFR'
+  if (p.includes('land acquisition')) return 'RAW_LAND'
   if (p.includes('raw land') || p.includes('raw')) return 'RAW_LAND'
+  if (p.includes('memorial investments')) return 'A&D'
   if (p.includes('acquisition') || p.includes('a&d') || p.includes('development loan')) return 'A&D'
   if (p.includes('finished lot') || p.includes('lot loan')) return 'FINISHED_LOTS'
+  if (p.includes('otc')) return 'OTC'
   if (
     p.includes('single family') || p.includes('sfr') ||
     p.includes('residential construction') || p.includes('construction')

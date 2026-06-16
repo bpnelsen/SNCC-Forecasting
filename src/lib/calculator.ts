@@ -579,9 +579,15 @@ export function runForecast(input: ForecastInput): ForecastResult {
     'A&D': [],
     FINISHED_LOTS: [],
     HHH: [],
+    OTC: [],
     UNKNOWN: [],
   }
   for (const l of input.loans) loansByType[l.loan_type].push(l)
+  // OTC is tagged separately on /loans so analysts can see "OTC" in the Type
+  // column, but it rolls into the SFR segment for every dashboard / chart /
+  // forecast rollup — same draw curve, same maturity behavior, same
+  // outstanding semantics as a Single Family construction loan.
+  const sfrLoans = [...loansByType.SFR, ...loansByType.OTC]
 
   const sumDisbursed = (loans: Loan[]) =>
     loans.reduce((s, l) => s + (l.loan_amount_disbursed || 0), 0)
@@ -629,7 +635,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
   })
   const loanTypeToSegment: Record<LoanType, Segment> = {
     SFR: 'sfr', MFR: 'mfr', 'A&D': 'and', RAW_LAND: 'raw_land',
-    FINISHED_LOTS: 'finished_lots', HHH: 'hhh', UNKNOWN: 'hhh',
+    FINISHED_LOTS: 'finished_lots', HHH: 'hhh', OTC: 'sfr', UNKNOWN: 'hhh',
   }
   const loansByParent = new Map<string, ParentSegmentLoans>()
   const loanCountByParent = new Map<string, number>()
@@ -661,7 +667,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const sumExisting = (loans: Loan[]) =>
       loans.reduce((s, l) => s + projectExistingLoanBalance(l, m.date, input.loanPrograms, startDate), 0)
 
-    const sfr_existing = sumExisting(loansByType.SFR)
+    const sfr_existing = sumExisting(sfrLoans)
     const mfr_existing = sumExisting(loansByType.MFR)
     const and_existing = sumExisting(loansByType['A&D'])
     const raw_existing = sumExisting(loansByType.RAW_LAND)
@@ -733,7 +739,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     // Active = imported-loan drawn balance per segment. Memoized so the
     // outstanding_<seg> sums and the MonthlyBalance.active_<seg> exports
     // read the same value.
-    const active_sfr           = sumExistingOut(loansByType.SFR)
+    const active_sfr           = sumExistingOut(sfrLoans)
     const active_mfr           = sumExistingOut(loansByType.MFR)
     const active_and           = sumExistingOut(loansByType['A&D'])
     const active_raw_land      = sumExistingOut(loansByType.RAW_LAND)
@@ -1088,7 +1094,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     version_label: input.versionLabel,
     total_active_loans: input.loans.length,
     active_loans_outstanding: {
-      sfr:           sumDisbursed(loansByType.SFR),
+      sfr:           sumDisbursed(sfrLoans),
       mfr:           sumDisbursed(loansByType.MFR),
       and:           sumDisbursed(loansByType['A&D']),
       raw_land:      sumDisbursed(loansByType.RAW_LAND),

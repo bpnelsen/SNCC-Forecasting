@@ -99,6 +99,17 @@ export interface MonthlyBalance {
   outstanding_raw_land: number
   outstanding_finished_lots: number
   outstanding_hhh: number
+  // Active imported-loan portfolio drawn balance per segment. = sumExistingOut(
+  // loansByType.<SEG>) — purely the imported book of business, decaying at
+  // maturity. No new cohorts (LB-driven or scheduled) included. Used by the
+  // dashboard Monthly Summary so its per-segment rows are clean of cohort
+  // double-counting. hhh has no imported contribution (migration 017
+  // reclassified everything), so it isn't surfaced here.
+  active_sfr: number
+  active_mfr: number
+  active_and: number
+  active_raw_land: number
+  active_finished_lots: number
   variance: number
   new_originations_sfr: number
   new_originations_mfr: number
@@ -344,6 +355,14 @@ export interface ByParentSegmentBalance {
   outstanding_raw_land: number
   outstanding_finished_lots: number
   outstanding_hhh: number
+  // Active imported-loan drawn balance per segment for this parent.
+  // = sumExistingOut on the parent's loan slot. Mirrors MonthlyBalance
+  // .active_<seg> at the parent slice.
+  active_sfr: number
+  active_mfr: number
+  active_and: number
+  active_raw_land: number
+  active_finished_lots: number
   // Forecasted new-origination cohort balances (builder → parent)
   forecasted_sfr: number
   forecasted_mfr: number

@@ -730,11 +730,19 @@ export function runForecast(input: ForecastInput): ForecastResult {
     // (decays at maturity) + forecasted cohorts (already a drawn balance).
     const sumExistingOut = (loans: Loan[]) =>
       loans.reduce((s, l) => s + projectExistingLoanOutstanding(l, m.date, startDate), 0)
-    const outstanding_sfr           = sumExistingOut(loansByType.SFR)           + newBySegment.sfr
-    const outstanding_mfr           = sumExistingOut(loansByType.MFR)           + newBySegment.mfr
-    const outstanding_and           = sumExistingOut(loansByType['A&D'])        + newBySegment.and + aAndDPlanned
-    const outstanding_raw_land      = sumExistingOut(loansByType.RAW_LAND)      + newBySegment.raw_land
-    const outstanding_finished_lots = sumExistingOut(loansByType.FINISHED_LOTS) + newBySegment.finished_lots
+    // Active = imported-loan drawn balance per segment. Memoized so the
+    // outstanding_<seg> sums and the MonthlyBalance.active_<seg> exports
+    // read the same value.
+    const active_sfr           = sumExistingOut(loansByType.SFR)
+    const active_mfr           = sumExistingOut(loansByType.MFR)
+    const active_and           = sumExistingOut(loansByType['A&D'])
+    const active_raw_land      = sumExistingOut(loansByType.RAW_LAND)
+    const active_finished_lots = sumExistingOut(loansByType.FINISHED_LOTS)
+    const outstanding_sfr           = active_sfr           + newBySegment.sfr
+    const outstanding_mfr           = active_mfr           + newBySegment.mfr
+    const outstanding_and           = active_and           + newBySegment.and + aAndDPlanned
+    const outstanding_raw_land      = active_raw_land      + newBySegment.raw_land
+    const outstanding_finished_lots = active_finished_lots + newBySegment.finished_lots
     // HHH/JV outstanding mirrors hhh_existing: hhh_jv_projects + forecasted only.
     const outstanding_hhh           = newBySegment.hhh + hhhJv
 
@@ -813,6 +821,14 @@ export function runForecast(input: ForecastInput): ForecastResult {
       const lb_p       = lbByParent.get(parentId)         ?? 0
       const hhh_p      = hhhJvByParent.get(parentId)      ?? 0
       const aad_p      = aAndDByParent.get(parentId)      ?? 0
+      // Active = parent's imported-loan drawn balance per segment (no cohorts).
+      // Memoized so the outstanding_<seg> rollup and the per-parent
+      // active_<seg> export share one computation.
+      const p_active_sfr           = segs ? sumExistingOut(segs.sfr)           : 0
+      const p_active_mfr           = segs ? sumExistingOut(segs.mfr)           : 0
+      const p_active_and           = segs ? sumExistingOut(segs.and)           : 0
+      const p_active_raw_land      = segs ? sumExistingOut(segs.raw_land)      : 0
+      const p_active_finished_lots = segs ? sumExistingOut(segs.finished_lots) : 0
       by_parent[parentId] = {
         sfr:           segs ? sumExisting(segs.sfr)           : 0,
         mfr:           segs ? sumExisting(segs.mfr)           : 0,
@@ -826,12 +842,17 @@ export function runForecast(input: ForecastInput): ForecastResult {
         // outstanding_<seg> rolls in the matching builder-attributed contributions
         // so the Outstanding tile / Total Outstanding rows can sum per parent
         // without consulting the forecasted / planned / hhh-jv maps separately.
-        outstanding_sfr:           (segs ? sumExistingOut(segs.sfr)           : 0) + fcst.sfr,
-        outstanding_mfr:           (segs ? sumExistingOut(segs.mfr)           : 0) + fcst.mfr,
-        outstanding_and:           (segs ? sumExistingOut(segs.and)           : 0) + fcst.and + aad_p,
-        outstanding_raw_land:      (segs ? sumExistingOut(segs.raw_land)      : 0) + fcst.raw_land,
-        outstanding_finished_lots: (segs ? sumExistingOut(segs.finished_lots) : 0) + fcst.finished_lots,
+        outstanding_sfr:           p_active_sfr           + fcst.sfr,
+        outstanding_mfr:           p_active_mfr           + fcst.mfr,
+        outstanding_and:           p_active_and           + fcst.and + aad_p,
+        outstanding_raw_land:      p_active_raw_land      + fcst.raw_land,
+        outstanding_finished_lots: p_active_finished_lots + fcst.finished_lots,
         outstanding_hhh:           fcst.hhh + hhh_p,
+        active_sfr:           p_active_sfr,
+        active_mfr:           p_active_mfr,
+        active_and:           p_active_and,
+        active_raw_land:      p_active_raw_land,
+        active_finished_lots: p_active_finished_lots,
         // Per-parent forecasted_<seg> tracks scheduled cohorts only so the
         // dashboard's per-parent slice matches the global rule (LB-driven
         // verticals stay out of "Forecasted").
@@ -942,6 +963,11 @@ export function runForecast(input: ForecastInput): ForecastResult {
       outstanding_raw_land,
       outstanding_finished_lots,
       outstanding_hhh,
+      active_sfr,
+      active_mfr,
+      active_and,
+      active_raw_land,
+      active_finished_lots,
       variance,
       new_originations_sfr: newBySegmentScheduled.sfr,
       new_originations_mfr: newBySegmentScheduled.mfr,

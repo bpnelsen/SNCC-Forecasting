@@ -61,22 +61,27 @@ function sliceSegment(
   m: MonthlyBalance,
   seg: SegKey,
   selectedParents: Set<string> | null,
-): { existing: number; forecasted: number; outstanding: number } {
+): { existing: number; forecasted: number; outstanding: number; active: number } {
+  // hhh has no engine-exposed active_<seg> (no imported HHH loans post
+  // migration 017); active stays 0 for the hhh slot.
   if (selectedParents === null) {
     const fcst = m[`forecasted_${seg}` as const]
+    const active = seg === 'hhh' ? 0 : m[`active_${seg}` as const]
     return {
       existing:    m[seg] - fcst,
       forecasted:  fcst,
       outstanding: m[`outstanding_${seg}` as const],
+      active,
     }
   }
-  let existing = 0, forecasted = 0, outstanding = 0
+  let existing = 0, forecasted = 0, outstanding = 0, active = 0
   for (const pid of selectedParents) {
     const slot = m.by_parent[pid]
     if (!slot) continue
     existing    += slot[seg]
     forecasted  += slot[`forecasted_${seg}` as const]
     outstanding += slot[`outstanding_${seg}` as const]
+    if (seg !== 'hhh') active += slot[`active_${seg}` as const]
     // hhh segment also carries HHH/JV project balances; and segment carries
     // forward-planned A&D loan balances. The engine adds these into m.<seg>
     // and m.outstanding_<seg> globally — the per-parent slice has to do
@@ -84,7 +89,7 @@ function sliceSegment(
     if (seg === 'hhh') forecasted += slot.hhh_jv_balance
     if (seg === 'and') forecasted += slot.a_and_d_planned
   }
-  return { existing, forecasted, outstanding }
+  return { existing, forecasted, outstanding, active }
 }
 
 // Land Bucket honors the same parent selection now that builders carry a
@@ -109,9 +114,9 @@ function applyFilter(
   let prev = 0
   return months.map((m, i) => {
     const slice = (seg: SegKey, chip: FilterKey) => {
-      if (!active.has(chip)) return { combined: 0, fcst: 0, outstanding: 0 }
-      const { existing, forecasted, outstanding } = sliceSegment(m, seg, selectedParents)
-      return { combined: existing + forecasted, fcst: forecasted, outstanding }
+      if (!active.has(chip)) return { combined: 0, fcst: 0, outstanding: 0, active: 0 }
+      const { existing, forecasted, outstanding, active: act } = sliceSegment(m, seg, selectedParents)
+      return { combined: existing + forecasted, fcst: forecasted, outstanding, active: act }
     }
 
     const sSfr = slice('sfr',           'sfr')
@@ -139,6 +144,11 @@ function applyFilter(
       outstanding_raw_land:      sRaw.outstanding,
       outstanding_finished_lots: sFin.outstanding,
       outstanding_hhh:           sHhh.outstanding,
+      active_sfr:           sSfr.active,
+      active_mfr:           sMfr.active,
+      active_and:           sAnd.active,
+      active_raw_land:      sRaw.active,
+      active_finished_lots: sFin.active,
       total_loans: 0,
       total_all:   0,
       variance:    0,
@@ -313,14 +323,15 @@ export default function DashboardPage() {
           <div className="card-header"><span className="card-title">Current Breakdown</span></div>
           <div className="p-4 space-y-2">
             {[
-              // Base SFR / MFR are existing loans only; the forecasted
-              // portion is broken out into its own banded rows below so the
-              // slices don't overlap (Total still includes both).
-              { label: 'SFR',            value: current.sfr - current.forecasted_sfr, color: '#58A6FF' },
-              { label: 'MFR',            value: current.mfr - current.forecasted_mfr, color: '#D4A853' },
-              { label: 'A&D',            value: current.and,            color: '#3FB950' },
-              { label: 'Raw Land',       value: current.raw_land,       color: '#8B949E' },
-              { label: 'Finished Lots',  value: current.finished_lots,  color: '#A371F7' },
+              // Base rows are imported active loans only (m.active_<seg>);
+              // forecasted SFR/MFR cohorts get their own banded rows below
+              // so the slices never overlap. Matches the Monthly Summary
+              // table semantics one-for-one.
+              { label: 'SFR',            value: current.active_sfr,           color: '#58A6FF' },
+              { label: 'MFR',            value: current.active_mfr,           color: '#D4A853' },
+              { label: 'A&D',            value: current.active_and,           color: '#3FB950' },
+              { label: 'Raw Land',       value: current.active_raw_land,      color: '#8B949E' },
+              { label: 'Finished Lots',  value: current.active_finished_lots, color: '#A371F7' },
               { label: 'HHH/JV',         value: current.hhh,            color: '#F85149' },
               { label: 'Land Bucket',    value: current.land_bucket,    color: '#79C0FF' },
               { label: 'Forecasted SFR', value: current.forecasted_sfr, color: '#8B949E', forecast: true },
@@ -383,18 +394,22 @@ interface SummaryRow {
 }
 
 function SummaryTable({ months }: { months: MonthlyBalance[] }) {
-  // Drawn/outstanding total for the loan book (existing disbursed +
-  // forecasted cohorts), excluding Land Bucket; "All" adds Land Bucket.
+  // Per-segment rows: active = imported loan drawn balance only (no cohorts).
+  // Forecasted rows: scheduled new-origination cohort drawn balance.
+  // Total Outstanding (Loans) = sum of every loan row above (active + the
+  // two Forecasted rows). LB-driven verticals and HHH/JV are deliberately
+  // excluded — LB is its own row, HHH/JV is sourced from the manual tab.
   const outLoans = (m: MonthlyBalance) =>
-    m.outstanding_sfr + m.outstanding_mfr + m.outstanding_and +
-    m.outstanding_raw_land + m.outstanding_finished_lots + m.outstanding_hhh
+    m.active_sfr + m.active_mfr + m.active_and +
+    m.active_raw_land + m.active_finished_lots +
+    m.forecasted_sfr + m.forecasted_mfr
 
   const rows: SummaryRow[] = [
-    { label: 'SFR',             values: months.map(m => m.sfr - m.forecasted_sfr), kind: 'currency' },
-    { label: 'MFR',             values: months.map(m => m.mfr - m.forecasted_mfr), kind: 'currency' },
-    { label: 'A&D',             values: months.map(m => m.and),                    kind: 'currency' },
-    { label: 'Raw Land',        values: months.map(m => m.raw_land),               kind: 'currency' },
-    { label: 'Fin. Lots',       values: months.map(m => m.finished_lots),          kind: 'currency' },
+    { label: 'SFR',             values: months.map(m => m.active_sfr),             kind: 'currency' },
+    { label: 'MFR',             values: months.map(m => m.active_mfr),             kind: 'currency' },
+    { label: 'A&D',             values: months.map(m => m.active_and),             kind: 'currency' },
+    { label: 'Raw Land',        values: months.map(m => m.active_raw_land),        kind: 'currency' },
+    { label: 'Fin. Lots',       values: months.map(m => m.active_finished_lots),   kind: 'currency' },
     { label: 'Forecasted SFR',  values: months.map(m => m.forecasted_sfr),         kind: 'currency', emphasis: 'forecast' },
     { label: 'Forecasted MFR',  values: months.map(m => m.forecasted_mfr),         kind: 'currency', emphasis: 'forecast' },
     { label: 'Land Bucket',     values: months.map(m => m.land_bucket),            kind: 'currency' },

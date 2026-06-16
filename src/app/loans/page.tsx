@@ -28,11 +28,19 @@ const CHIPS: { key: FilterKey; label: string; color: string; types: LoanType[] }
   { key: 'hhh',           label: 'HHH/JV',        color: '#F85149', types: ['HHH', 'UNKNOWN'] },
 ]
 
-// Manual loan_type override options for the Type column dropdown. Order
-// matches what users typically reach for; UNKNOWN sits at the end as a
-// "couldn't classify" escape hatch.
-const LOAN_TYPE_OPTIONS: LoanType[] = [
-  'SFR', 'MFR', 'A&D', 'RAW_LAND', 'FINISHED_LOTS', 'OTC', 'HHH', 'UNKNOWN',
+// Manual loan_type override options for the Type column dropdown. Shorter
+// display labels keep the cell narrow; the value sent to the API is still
+// the canonical LoanType enum. Order = typical analyst use frequency;
+// UNKNOWN sits at the end as a "couldn't classify" escape hatch.
+const LOAN_TYPE_OPTIONS: { value: LoanType; label: string }[] = [
+  { value: 'SFR',           label: 'SFR' },
+  { value: 'MFR',           label: 'MFR' },
+  { value: 'A&D',           label: 'A&D' },
+  { value: 'RAW_LAND',      label: 'Raw Land' },
+  { value: 'FINISHED_LOTS', label: 'Fin Lots' },
+  { value: 'OTC',           label: 'OTC' },
+  { value: 'HHH',           label: 'HHH/JV' },
+  { value: 'UNKNOWN',       label: 'Unknown' },
 ]
 
 // Reverse lookup: loan_type → chip key (for filter membership tests).
@@ -270,7 +278,7 @@ export default function LoansPage() {
                 <th className="sticky left-0 z-20 bg-surface">Loan #</th>
                 <th>Borrower</th>
                 <th>Program</th>
-                <th>Type</th>
+                <th className="min-w-[88px]">Type</th>
                 <th className="text-right">Original</th>
                 <th className="text-right">Current</th>
                 <th className="text-right">Remaining</th>
@@ -307,11 +315,12 @@ export default function LoansPage() {
                         value={loan.loan_type}
                         disabled={saving.has(loan.id)}
                         onChange={e => patchLoan(loan.id!, 'loan_type', e.target.value)}
-                        className="form-input text-[10px] py-0.5 px-1 w-full bg-transparent border border-transparent rounded
+                        className="w-full min-w-0 bg-transparent border border-transparent rounded
+                                   px-1 py-0.5 text-[10px] text-fg
                                    focus:outline-none focus:border-accent focus:bg-bg"
                       >
                         {LOAN_TYPE_OPTIONS.map(t => (
-                          <option key={t} value={t}>{t}</option>
+                          <option key={t.value} value={t.value}>{t.label}</option>
                         ))}
                       </select>
                     ) : (
@@ -336,7 +345,9 @@ export default function LoansPage() {
                             const n = Math.max(1, Math.floor(Number(e.target.value) || 1))
                             if (n !== loan.number_of_lots) patchLoan(loan.id!, 'number_of_lots', n)
                           }}
-                          className="form-input text-[10px] w-16 py-0.5 px-1 text-right"
+                          className="w-14 min-w-0 bg-transparent border border-transparent rounded
+                                     px-1 py-0.5 text-[10px] text-fg text-right
+                                     focus:outline-none focus:border-accent focus:bg-bg"
                         />
                       </td>
                       <td className="num">
@@ -350,7 +361,9 @@ export default function LoansPage() {
                             const n = Math.max(0, Math.floor(Number(e.target.value) || 0))
                             if (n !== loan.release_period_months) patchLoan(loan.id!, 'release_period_months', n)
                           }}
-                          className="form-input text-[10px] w-16 py-0.5 px-1 text-right"
+                          className="w-14 min-w-0 bg-transparent border border-transparent rounded
+                                     px-1 py-0.5 text-[10px] text-fg text-right
+                                     focus:outline-none focus:border-accent focus:bg-bg"
                         />
                       </td>
                     </>

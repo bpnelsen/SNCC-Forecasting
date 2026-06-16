@@ -687,18 +687,25 @@ export function runForecast(input: ForecastInput): ForecastResult {
       finished_lots: { count: 0, amount: 0 },
       hhh:           { count: 0, amount: 0 },
     }
-    // Count / amount of new originations for the Forecast page's New Orig (#)
-    // and New Orig $ columns. Scheduled-only — Land Bucket-spawned vertical
-    // cohorts are a side-effect of lot sales rather than originations the
-    // user committed to, so they're excluded from these tallies. The balance
-    // loop below still walks allOriginations, so LB-driven cohorts continue
-    // to feed the segment balance / forecasted_<seg> figures unchanged.
+    // Count / amount AND drawn balance contribution of scheduled new
+    // originations. LB-spawned vertical cohorts are a side-effect of lot
+    // sales rather than originations the user committed to, so the counts
+    // ($ + #) AND the forecasted_<seg> balance contribution exclude them.
+    // newBySegmentScheduled drives the forecasted_<seg> exports; newBySegment
+    // below still walks all sources so the headline m.<seg> /
+    // m.outstanding_<seg> totals don't lose the LB-driven contribution.
+    const newBySegmentScheduled: Record<Segment, number> = {
+      sfr: 0, mfr: 0, raw_land: 0, and: 0, finished_lots: 0, hhh: 0,
+    }
     for (const orig of scheduledOriginations) {
+      const seg = PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]
       if (orig.origination_month_idx === i) {
-        const seg = PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]
         newOrigsBySeg[seg].count  += orig.count
         newOrigsBySeg[seg].amount += orig.count * orig.max_amount_per_loan
       }
+      const bal = lotOriginationBalance(orig, i)
+      if (bal === 0) continue
+      newBySegmentScheduled[seg] += bal
     }
     for (const orig of allOriginations) {
       const bal = lotOriginationBalance(orig, i)
@@ -740,13 +747,22 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const newSegBucket = (): SegBucket => ({
       sfr: 0, mfr: 0, and: 0, raw_land: 0, finished_lots: 0, hhh: 0,
     })
-    const fcstByParent = new Map<string, SegBucket>()
+    // Two per-parent cohort balance maps:
+    //   fcstByParent          — all sources (LB-driven + scheduled). Feeds the
+    //                           per-parent outstanding_<seg> rollup so totals
+    //                           keep matching m.outstanding_<seg>.
+    //   fcstSchedByParent     — scheduled cohorts only. Feeds per-parent
+    //                           forecasted_<seg> so the dashboard tiles /
+    //                           Monthly Summary respect the same scheduled-
+    //                           only rule as m.forecasted_<seg>.
+    const fcstByParent      = new Map<string, SegBucket>()
+    const fcstSchedByParent = new Map<string, SegBucket>()
     const lbByParent      = new Map<string, number>()
     const hhhJvByParent   = new Map<string, number>()
     const aAndDByParent   = new Map<string, number>()
-    const bumpFcst = (pid: string, seg: Segment, amount: number) => {
-      let bucket = fcstByParent.get(pid)
-      if (!bucket) { bucket = newSegBucket(); fcstByParent.set(pid, bucket) }
+    const bumpInto = (map: Map<string, SegBucket>, pid: string, seg: Segment, amount: number) => {
+      let bucket = map.get(pid)
+      if (!bucket) { bucket = newSegBucket(); map.set(pid, bucket) }
       bucket[seg] += amount
     }
     const bump = (map: Map<string, number>, pid: string, amount: number) => {
@@ -754,11 +770,14 @@ export function runForecast(input: ForecastInput): ForecastResult {
       map.set(pid, (map.get(pid) ?? 0) + amount)
     }
 
+    const scheduledIdSet = new Set(scheduledOriginations)
     for (const orig of allOriginations) {
       const bal = lotOriginationBalance(orig, i)
       if (bal === 0) continue
       const seg = PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]
-      bumpFcst(parentIdForBuilder(orig.builder_id), seg, bal)
+      const pid = parentIdForBuilder(orig.builder_id)
+      bumpInto(fcstByParent, pid, seg, bal)
+      if (scheduledIdSet.has(orig)) bumpInto(fcstSchedByParent, pid, seg, bal)
     }
     for (const sched of lb.schedules) {
       const builderId = lbProjectBuilder.get(sched.project_id) ?? null
@@ -788,11 +807,12 @@ export function runForecast(input: ForecastInput): ForecastResult {
 
     const by_parent: Record<string, ByParentSegmentBalance> = {}
     for (const parentId of allParents) {
-      const segs   = loansByParent.get(parentId) ?? null
-      const fcst   = fcstByParent.get(parentId)   ?? newSegBucket()
-      const lb_p   = lbByParent.get(parentId)     ?? 0
-      const hhh_p  = hhhJvByParent.get(parentId)  ?? 0
-      const aad_p  = aAndDByParent.get(parentId)  ?? 0
+      const segs       = loansByParent.get(parentId)      ?? null
+      const fcst       = fcstByParent.get(parentId)       ?? newSegBucket()
+      const fcstSched  = fcstSchedByParent.get(parentId)  ?? newSegBucket()
+      const lb_p       = lbByParent.get(parentId)         ?? 0
+      const hhh_p      = hhhJvByParent.get(parentId)      ?? 0
+      const aad_p      = aAndDByParent.get(parentId)      ?? 0
       by_parent[parentId] = {
         sfr:           segs ? sumExisting(segs.sfr)           : 0,
         mfr:           segs ? sumExisting(segs.mfr)           : 0,
@@ -812,12 +832,15 @@ export function runForecast(input: ForecastInput): ForecastResult {
         outstanding_raw_land:      (segs ? sumExistingOut(segs.raw_land)      : 0) + fcst.raw_land,
         outstanding_finished_lots: (segs ? sumExistingOut(segs.finished_lots) : 0) + fcst.finished_lots,
         outstanding_hhh:           fcst.hhh + hhh_p,
-        forecasted_sfr:           fcst.sfr,
-        forecasted_mfr:           fcst.mfr,
-        forecasted_and:           fcst.and,
-        forecasted_raw_land:      fcst.raw_land,
-        forecasted_finished_lots: fcst.finished_lots,
-        forecasted_hhh:           fcst.hhh,
+        // Per-parent forecasted_<seg> tracks scheduled cohorts only so the
+        // dashboard's per-parent slice matches the global rule (LB-driven
+        // verticals stay out of "Forecasted").
+        forecasted_sfr:           fcstSched.sfr,
+        forecasted_mfr:           fcstSched.mfr,
+        forecasted_and:           fcstSched.and,
+        forecasted_raw_land:      fcstSched.raw_land,
+        forecasted_finished_lots: fcstSched.finished_lots,
+        forecasted_hhh:           fcstSched.hhh,
         land_bucket:    lb_p,
         hhh_jv_balance: hhh_p,
         a_and_d_planned: aad_p,
@@ -920,19 +943,23 @@ export function runForecast(input: ForecastInput): ForecastResult {
       outstanding_finished_lots,
       outstanding_hhh,
       variance,
-      new_originations_sfr: newBySegment.sfr,
-      new_originations_mfr: newBySegment.mfr,
-      forecasted_sfr: newBySegment.sfr,
-      forecasted_mfr: newBySegment.mfr,
-      forecasted_and: newBySegment.and,
-      forecasted_raw_land: newBySegment.raw_land,
-      forecasted_finished_lots: newBySegment.finished_lots,
-      forecasted_hhh: newBySegment.hhh,
+      new_originations_sfr: newBySegmentScheduled.sfr,
+      new_originations_mfr: newBySegmentScheduled.mfr,
+      // Forecasted_<seg> exports scheduled cohorts only — LB-driven verticals
+      // continue to feed m.<seg> / m.outstanding_<seg> totals but never the
+      // "Forecasted" rollups (Dashboard Monthly Summary, Forecast page Fcst
+      // columns, Current Breakdown tile).
+      forecasted_sfr: newBySegmentScheduled.sfr,
+      forecasted_mfr: newBySegmentScheduled.mfr,
+      forecasted_and: newBySegmentScheduled.and,
+      forecasted_raw_land: newBySegmentScheduled.raw_land,
+      forecasted_finished_lots: newBySegmentScheduled.finished_lots,
+      forecasted_hhh: newBySegmentScheduled.hhh,
       new_origs_by_segment: newOrigsBySeg,
       by_parent,
       forecasted_total:
-        newBySegment.sfr + newBySegment.mfr + newBySegment.and +
-        newBySegment.raw_land + newBySegment.finished_lots + newBySegment.hhh,
+        newBySegmentScheduled.sfr + newBySegmentScheduled.mfr + newBySegmentScheduled.and +
+        newBySegmentScheduled.raw_land + newBySegmentScheduled.finished_lots + newBySegmentScheduled.hhh,
       yield_active,
       yield_projected,
       yield_land_bucket,

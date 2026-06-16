@@ -20,6 +20,8 @@ import {
   ParentCompanyPattern,
   BorrowerParentMapping,
   ByParentSegmentBalance,
+  OriginationProjectDetail,
+  OriginationProjectMonth,
 } from './types'
 
 // Key used in MonthlyBalance.by_parent for loans whose borrower didn't match
@@ -944,6 +946,76 @@ export function runForecast(input: ForecastInput): ForecastResult {
     })
   }
 
+  // ── Per-origination-project detail (Forecast → Detailed view) ─────────────
+  // Group every cohort in allOriginations by its source project so the page
+  // can render rows of developments × months for count / outstanding /
+  // total-committed. project_id namespaces: LB project ids vs /originations
+  // entry ids — both are uuids and won't collide, but we prefix them in the
+  // bucket key just in case a builder ever reuses an id across both tables.
+  const lbProjectsById = new Map(input.landBucketProjects.map(p => [p.id, p]))
+  const newOrigEntriesById = new Map(input.newOriginations.map(n => [n.id, n]))
+  type ProjectBucket = {
+    name: string
+    source: 'land_bucket' | 'scheduled'
+    segment: Segment
+    builder_id: string | null
+    origs: LotOrigination[]
+  }
+  const origsByProject = new Map<string, ProjectBucket>()
+  for (const orig of allOriginations) {
+    const lb = lbProjectsById.get(orig.project_id)
+    const ne = newOrigEntriesById.get(orig.project_id)
+    const isLb = !!lb
+    const key = `${isLb ? 'lb' : 'sc'}:${orig.project_id}`
+    let bucket = origsByProject.get(key)
+    if (!bucket) {
+      const name = isLb
+        ? (lb!.name || orig.project_id)
+        : (ne?.development_name || ne?.id || orig.project_id)
+      bucket = {
+        name,
+        source: isLb ? 'land_bucket' : 'scheduled',
+        segment: PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type],
+        builder_id: orig.builder_id,
+        origs: [],
+      }
+      origsByProject.set(key, bucket)
+    }
+    bucket.origs.push(orig)
+  }
+
+  const newOriginationProjects: OriginationProjectDetail[] = []
+  for (const [key, bucket] of origsByProject) {
+    let totalLoanAmount = 0
+    for (const orig of bucket.origs) {
+      totalLoanAmount += orig.count * orig.max_amount_per_loan
+    }
+    const monthsData: OriginationProjectMonth[] = months.map((_, i) => {
+      let count = 0
+      let outstanding = 0
+      for (const orig of bucket.origs) {
+        if (orig.origination_month_idx === i) count += orig.count
+        outstanding += lotOriginationBalance(orig, i)
+      }
+      return { count, outstanding }
+    })
+    newOriginationProjects.push({
+      project_id: key,
+      project_name: bucket.name,
+      source: bucket.source,
+      segment: bucket.segment,
+      builder_name: bucket.builder_id ? buildersById.get(bucket.builder_id)?.name ?? null : null,
+      total_loan_amount: totalLoanAmount,
+      months: monthsData,
+    })
+  }
+  // Stable display order: scheduled entries first (user-curated), then
+  // LB-driven; alphabetical inside each group.
+  newOriginationProjects.sort((a, b) => {
+    if (a.source !== b.source) return a.source === 'scheduled' ? -1 : 1
+    return a.project_name.localeCompare(b.project_name)
+  })
+
   const m0 = monthly[0]
   return {
     months: monthly,
@@ -975,5 +1047,6 @@ export function runForecast(input: ForecastInput): ForecastResult {
     imported_a_and_d_schedules: importedAAndDSchedules,
     parent_companies: input.parentCompanies.map(p => ({ id: p.id, name: p.name })),
     parent_loan_counts: Object.fromEntries(loanCountByParent),
+    new_origination_projects: newOriginationProjects,
   }
 }

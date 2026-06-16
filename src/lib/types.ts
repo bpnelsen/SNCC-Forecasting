@@ -198,6 +198,36 @@ export interface ForecastResult {
   // flat-until-maturity. Surfaced so the A&D tab can show them alongside
   // forward-planned A&D loans without changing how the engine values them.
   imported_a_and_d_schedules: AAndDLoanSchedule[]
+  // Per-origination-project per-month detail used by the Forecast page's
+  // Detailed view. Each entry groups every loan cohort (LB-driven verticals
+  // + scheduled /originations entries) under its source project so the user
+  // can see counts and drawn balance broken out development-by-development.
+  new_origination_projects: OriginationProjectDetail[]
+}
+
+export type OriginationSegment = 'sfr' | 'mfr' | 'raw_land' | 'and' | 'finished_lots' | 'hhh'
+
+export interface OriginationProjectMonth {
+  // Loans started this month for this project.
+  count: number
+  // Drawn balance (running, decays at term) of every loan from this project
+  // at this month. Same math as the engine's lot-origination balance curve.
+  outstanding: number
+}
+
+export interface OriginationProjectDetail {
+  project_id: string
+  project_name: string
+  // 'land_bucket' = vertical loans spawned when a Land Bucket project sells a
+  // lot. 'scheduled' = /originations tab entries.
+  source: 'land_bucket' | 'scheduled'
+  segment: OriginationSegment
+  builder_name: string | null
+  // Total approved/committed loan amount across every cohort for this
+  // project — Σ (count × max_amount_per_loan). Constant for the project; the
+  // Detailed view replays it across every month column for visual alignment.
+  total_loan_amount: number
+  months: OriginationProjectMonth[]
 }
 
 // ─── Modular assumption entities (from migration 002) ───────────────────────

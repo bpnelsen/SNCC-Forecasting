@@ -207,43 +207,6 @@ export default function ForecastPage() {
         </div>
       </div>
 
-      {/* Income Detail Table */}
-      <div className="card fade-up fade-up-3">
-        <div className="card-header">
-          <span className="card-title">Income Breakdown</span>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Month</th>
-                <th className="text-right">Active Yield</th>
-                <th className="text-right">Proj. Yield</th>
-                <th className="text-right">LB Yield</th>
-                <th className="text-right">HHH/JV Yield</th>
-                <th className="text-right">A&amp;D Planned Yield</th>
-                <th className="text-right">Profit Sharing</th>
-                <th className="text-right">Total Income</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.months.map(m => (
-                <tr key={m.month}>
-                  <td className="text-fg font-medium">{m.label}</td>
-                  <td className="num">{formatCurrency(m.yield_active, true)}</td>
-                  <td className="num">{formatCurrency(m.yield_projected, true)}</td>
-                  <td className="num">{formatCurrency(m.yield_land_bucket, true)}</td>
-                  <td className="num">{formatCurrency(m.yield_hhh_jv ?? 0, true)}</td>
-                  <td className="num">{formatCurrency(m.yield_a_and_d_planned ?? 0, true)}</td>
-                  <td className="num text-success-light">{formatCurrency(m.profit_sharing, true)}</td>
-                  <td className="num font-medium text-accent">{formatCurrency(m.total_income, true)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
       {detailed && (
         <DetailedSection
           projects={data.new_origination_projects ?? []}
@@ -270,13 +233,18 @@ function DetailedSection({ projects, months, active }: {
   months: MonthlyBalance[]
   active: Set<FilterKey>
 }) {
-  // Respect the chip filter: only show projects whose segment is on.
-  const visible = projects.filter(p => active.has(p.segment as FilterKey))
+  // Only true loan originations — entries you added on /originations.
+  // Land Bucket-spawned vertical cohorts are a side-effect of lot sales,
+  // not loans you committed-to per se, so they're excluded here.
+  // Then respect the chip filter inside the loan set.
+  const visible = projects.filter(p =>
+    p.source === 'scheduled' && active.has(p.segment as FilterKey),
+  )
 
   if (visible.length === 0) {
     return (
       <div className="card fade-up p-6 text-center text-xs text-fg-dim">
-        No new-origination projects match the current product-type filter.
+        No scheduled new-origination loans match the current product-type filter.
         Add entries on the New Originations tab or enable more chips above.
       </div>
     )

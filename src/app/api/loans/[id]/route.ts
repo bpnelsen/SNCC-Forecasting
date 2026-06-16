@@ -1,19 +1,24 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
+import { LoanType } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
 
+const ALLOWED_LOAN_TYPES: LoanType[] = [
+  'SFR', 'MFR', 'RAW_LAND', 'A&D', 'FINISHED_LOTS', 'HHH', 'OTC', 'UNKNOWN',
+]
+
 // PATCH /api/loans/[id] — edits the Finished Lots release-rule fields
-// (number_of_lots, release_period_months). Other columns are not editable
-// here; importing a new Current Report version is the source of truth for
-// the rest of the loan record.
+// (number_of_lots, release_period_months) and manual loan_type overrides.
+// Other columns are not editable here; importing a new Current Report
+// version is the source of truth for the rest of the loan record.
 export async function PATCH(
   req: Request,
   ctx: { params: { id: string } },
 ) {
   try {
     const body = await req.json().catch(() => ({}))
-    const patch: Record<string, number> = {}
+    const patch: Record<string, number | string> = {}
 
     if (body.number_of_lots != null) {
       const n = Number(body.number_of_lots)
@@ -28,6 +33,15 @@ export async function PATCH(
         return NextResponse.json({ error: 'release_period_months must be ≥ 0' }, { status: 400 })
       }
       patch.release_period_months = Math.floor(n)
+    }
+    if (body.loan_type != null) {
+      const t = String(body.loan_type)
+      if (!ALLOWED_LOAN_TYPES.includes(t as LoanType)) {
+        return NextResponse.json({
+          error: `loan_type must be one of: ${ALLOWED_LOAN_TYPES.join(', ')}`,
+        }, { status: 400 })
+      }
+      patch.loan_type = t
     }
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: 'No editable fields supplied' }, { status: 400 })

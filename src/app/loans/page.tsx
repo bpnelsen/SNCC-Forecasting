@@ -28,6 +28,13 @@ const CHIPS: { key: FilterKey; label: string; color: string; types: LoanType[] }
   { key: 'hhh',           label: 'HHH/JV',        color: '#F85149', types: ['HHH', 'UNKNOWN'] },
 ]
 
+// Manual loan_type override options for the Type column dropdown. Order
+// matches what users typically reach for; UNKNOWN sits at the end as a
+// "couldn't classify" escape hatch.
+const LOAN_TYPE_OPTIONS: LoanType[] = [
+  'SFR', 'MFR', 'A&D', 'RAW_LAND', 'FINISHED_LOTS', 'OTC', 'HHH', 'UNKNOWN',
+]
+
 // Reverse lookup: loan_type → chip key (for filter membership tests).
 const LOAN_TYPE_TO_CHIP = new Map<LoanType, FilterKey>()
 for (const c of CHIPS) for (const t of c.types) LOAN_TYPE_TO_CHIP.set(t, c.key)
@@ -99,14 +106,14 @@ export default function LoansPage() {
   // recompute immediately; on failure we re-load to drop the bad value.
   const patchLoan = async (
     id: string,
-    field: 'number_of_lots' | 'release_period_months',
-    value: number,
+    field: 'number_of_lots' | 'release_period_months' | 'loan_type',
+    value: number | string,
   ) => {
     setData(prev => {
       if (!prev) return prev
       return {
         ...prev,
-        loans: prev.loans.map(l => l.id === id ? { ...l, [field]: value } : l),
+        loans: prev.loans.map(l => l.id === id ? { ...l, [field]: value } as Loan : l),
       }
     })
     setSaving(s => { const n = new Set(s); n.add(id); return n })
@@ -294,7 +301,23 @@ export default function LoansPage() {
                   </td>
                   <td className="text-fg">{loan.borrower}</td>
                   <td className="text-[10px]">{loan.loan_program || '—'}</td>
-                  <td className="text-[10px]">{loan.loan_type}</td>
+                  <td className="text-[10px]">
+                    {loan.id ? (
+                      <select
+                        value={loan.loan_type}
+                        disabled={saving.has(loan.id)}
+                        onChange={e => patchLoan(loan.id!, 'loan_type', e.target.value)}
+                        className="form-input text-[10px] py-0.5 px-1 w-full bg-transparent border border-transparent rounded
+                                   focus:outline-none focus:border-accent focus:bg-bg"
+                      >
+                        {LOAN_TYPE_OPTIONS.map(t => (
+                          <option key={t} value={t}>{t}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      loan.loan_type
+                    )}
+                  </td>
                   <td className="num">{formatCurrency(loan.original_loan_amount, true)}</td>
                   <td className="num">{formatCurrency(loan.current_loan_amount, true)}</td>
                   <td className="num">{formatCurrency(loan.loan_amount_remaining, true)}</td>

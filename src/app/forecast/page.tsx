@@ -43,12 +43,16 @@ function sliceMonth(m: MonthlyBalance, active: Set<FilterKey>) {
                       : k === 'raw_land'      ? m.forecasted_raw_land
                       : k === 'finished_lots' ? m.forecasted_finished_lots
                       :                          m.forecasted_hhh
-    activePortfolio  += k === 'sfr'           ? m.sfr
-                      : k === 'mfr'           ? m.mfr
-                      : k === 'and'           ? m.and
-                      : k === 'raw_land'      ? m.raw_land
-                      : k === 'finished_lots' ? m.finished_lots
-                      :                          m.hhh
+    // Active Portfolio and Current Loan Balance both read outstanding_<seg>
+    // so the columns reconcile cell-for-cell: existing loans contribute
+    // their drawn (loan_amount_disbursed) amount, new cohorts contribute
+    // their curve-driven drawn balance, and both go to 0 at maturity.
+    activePortfolio  += k === 'sfr'           ? m.outstanding_sfr
+                      : k === 'mfr'           ? m.outstanding_mfr
+                      : k === 'and'           ? m.outstanding_and
+                      : k === 'raw_land'      ? m.outstanding_raw_land
+                      : k === 'finished_lots' ? m.outstanding_finished_lots
+                      :                          m.outstanding_hhh
     currentLoanBalance += k === 'sfr'           ? m.outstanding_sfr
                        :  k === 'mfr'           ? m.outstanding_mfr
                        :  k === 'and'           ? m.outstanding_and

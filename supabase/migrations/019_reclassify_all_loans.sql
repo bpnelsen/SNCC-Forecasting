@@ -1,8 +1,12 @@
 -- Re-run the full classifier on every loan so prior imports pick up the
 -- patterns added on this branch — specifically:
---   * "Land Acquisition"      → RAW_LAND  (was being absorbed into A&D)
---   * "Memorial Investments"  → A&D       (was UNKNOWN)
---   * "OTC"                   → OTC       (was UNKNOWN)
+--   * "Land Acquisition" / "Land Aquisition" → RAW_LAND
+--       (was being absorbed into A&D)
+--   * "Memorial Investments"                 → A&D       (was UNKNOWN)
+--   * "OTC"                                  → OTC       (was UNKNOWN)
+--
+-- Includes common misspelling "Aquisition" (missing the c) — frequent in
+-- legacy loan-program strings.
 --
 -- Mirrors src/lib/parser.ts → classifyLoan(). Safe to re-run: the CASE
 -- returns the current value for rows that are already correct.
@@ -15,11 +19,13 @@ update loans
      when lower(coalesce(loan_program, '')) like '%multifamily%'
        or lower(coalesce(loan_program, '')) like '%multi-family%'
        or lower(coalesce(loan_program, '')) like '% mf%'                  then 'MFR'
-     when lower(coalesce(loan_program, '')) like '%land acquisition%'    then 'RAW_LAND'
+     when lower(coalesce(loan_program, '')) like '%land acquisition%'
+       or lower(coalesce(loan_program, '')) like '%land aquisition%'      then 'RAW_LAND'
      when lower(coalesce(loan_program, '')) like '%raw land%'
        or lower(coalesce(loan_program, '')) like '%raw%'                  then 'RAW_LAND'
      when lower(coalesce(loan_program, '')) like '%memorial investments%' then 'A&D'
      when lower(coalesce(loan_program, '')) like '%acquisition%'
+       or lower(coalesce(loan_program, '')) like '%aquisition%'
        or lower(coalesce(loan_program, '')) like '%a&d%'
        or lower(coalesce(loan_program, '')) like '%development loan%'     then 'A&D'
      when lower(coalesce(loan_program, '')) like '%finished lot%'

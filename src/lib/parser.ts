@@ -16,10 +16,11 @@ function classifyLoan(program: string, _borrower: string, _development: string):
   //     Must beat the generic SFR/construction rules below.
 
   if (p.includes('multifamily') || p.includes('multi-family') || p.includes(' mf')) return 'MFR'
-  if (p.includes('land acquisition')) return 'RAW_LAND'
+  if (p.includes('land acquisition') || p.includes('land aquisition')) return 'RAW_LAND'
   if (p.includes('raw land') || p.includes('raw')) return 'RAW_LAND'
   if (p.includes('memorial investments')) return 'A&D'
-  if (p.includes('acquisition') || p.includes('a&d') || p.includes('development loan')) return 'A&D'
+  if (p.includes('acquisition') || p.includes('aquisition') ||
+      p.includes('a&d') || p.includes('development loan')) return 'A&D'
   if (p.includes('finished lot') || p.includes('lot loan')) return 'FINISHED_LOTS'
   if (p.includes('otc')) return 'OTC'
   if (

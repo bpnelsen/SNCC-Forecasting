@@ -255,10 +255,12 @@ function DetailedSection({ projects, months, active }: {
   const countTotals = months.map((_, i) =>
     visible.reduce((s, p) => s + (p.months[i]?.count ?? 0), 0),
   )
+  const committedTotals = months.map((_, i) =>
+    visible.reduce((s, p) => s + (p.months[i]?.committed_amount ?? 0), 0),
+  )
   const outstandingTotals = months.map((_, i) =>
     visible.reduce((s, p) => s + (p.months[i]?.outstanding ?? 0), 0),
   )
-  const totalLoanAmountGrand = visible.reduce((s, p) => s + p.total_loan_amount, 0)
 
   return (
     <>
@@ -284,10 +286,11 @@ function DetailedSection({ projects, months, active }: {
         title="Detail · Total Loan Amount by Development"
         months={months}
         projects={visible}
-        // Same total replayed across every month column, per the spec.
-        cell={(p, _i) => p.total_loan_amount}
+        // Per-month committed $ — only the loans started that month for that
+        // project, valued at their avg loan amount.
+        cell={(p, i) => p.months[i]?.committed_amount ?? 0}
         format={v => v > 0 ? formatCurrency(v, true) : '—'}
-        totals={months.map(() => totalLoanAmountGrand)}
+        totals={committedTotals}
         totalFormat={v => v > 0 ? formatCurrency(v, true) : '—'}
       />
     </>

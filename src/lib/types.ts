@@ -210,6 +210,9 @@ export type OriginationSegment = 'sfr' | 'mfr' | 'raw_land' | 'and' | 'finished_
 export interface OriginationProjectMonth {
   // Loans started this month for this project.
   count: number
+  // Committed $ for loans started this month — count × avg loan amount,
+  // summed across every cohort whose origination_month_idx == this month.
+  committed_amount: number
   // Drawn balance (running, decays at term) of every loan from this project
   // at this month. Same math as the engine's lot-origination balance curve.
   outstanding: number

@@ -1000,12 +1000,16 @@ export function runForecast(input: ForecastInput): ForecastResult {
     }
     const monthsData: OriginationProjectMonth[] = months.map((_, i) => {
       let count = 0
+      let committed_amount = 0
       let outstanding = 0
       for (const orig of bucket.origs) {
-        if (orig.origination_month_idx === i) count += orig.count
+        if (orig.origination_month_idx === i) {
+          count += orig.count
+          committed_amount += orig.count * orig.max_amount_per_loan
+        }
         outstanding += lotOriginationBalance(orig, i)
       }
-      return { count, outstanding }
+      return { count, committed_amount, outstanding }
     })
     newOriginationProjects.push({
       project_id: key,

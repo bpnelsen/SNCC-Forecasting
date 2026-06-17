@@ -266,15 +266,16 @@ function projectExistingLoanBalance(
   return maxAmount > 0 ? maxAmount : 0
 }
 
-// Outstanding (cash actually drawn) for an existing loan. Same maturity gate
-// as projectExistingLoanBalance, but valued at loan_amount_disbursed instead
-// of the committed/face amount — held flat until the loan matures, then 0.
-// FINISHED_LOTS: same linear paydown as projectExistingLoanBalance.
+// Outstanding (cash actually drawn) for an existing loan. Held flat at
+// loan_amount_disbursed across the whole horizon — matured loans STAY on
+// the books so the Monthly Summary "Active <seg>" rows match the Active
+// Loan (Outstanding) tile, which sums disbursed without a maturity check.
+// Payoffs detection still runs against projectExistingLoanBalance (face,
+// gated at maturity) so the Forecast page's Payoffs column still fires
+// when a loan matures during the horizon.
+// FINISHED_LOTS: linear paydown still applies, independent of the
+// matured/active distinction.
 function projectExistingLoanOutstanding(loan: Loan, monthDate: Date, startDate: Date): number {
-  if (loan.current_loan_due_date) {
-    const dueDate = parseISO(loan.current_loan_due_date)
-    if (monthDate >= dueDate) return 0
-  }
   if (loan.loan_type === 'FINISHED_LOTS') {
     const start = Math.max(loan.loan_amount_disbursed, loan.current_loan_amount, 0)
     const i = monthsBetween(startDate, monthDate)

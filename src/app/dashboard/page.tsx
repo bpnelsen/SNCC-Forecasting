@@ -487,13 +487,14 @@ function ReconciliationPanel({ months, outstandingTile, reconciliation }: Reconc
     m0.forecasted_sfr + m0.forecasted_mfr + fcstAnd0
   const allSum = loansSum + m0.hhh + m0.land_bucket
 
-  // Active Loan (Outstanding) tile vs Σ active_<seg> at month 0. Differences
-  // are explained by matured loans (still in tile, dropped from active),
-  // FL basis delta (active uses max basis, tile uses disbursed), and the
-  // forecasted SFR/MFR/A&D cohort balance (in loansSum, not in tile).
+  // Active Loan (Outstanding) tile vs Σ active_<seg> at month 0. After the
+  // "matured loans stay on the books" change, the only residual delta is
+  // the FL basis (active uses max(disbursed, current_loan_amount); tile
+  // uses disbursed). The forecasted SFR/MFR/A&D cohort balance is in
+  // loansSum but not in the tile, hence the subtractions below.
   const activeOnly = loansSum - m0.forecasted_sfr - m0.forecasted_mfr - fcstAnd0
   const tileVsActive = outstandingTile - activeOnly
-  const expectedDelta = reconciliation.matured_disbursed - reconciliation.fl_basis_delta
+  const expectedDelta = -reconciliation.fl_basis_delta
   const unexplained = tileVsActive - expectedDelta
 
   type Row = { name: string; ok: boolean; lhs?: number; rhs?: number; note: string }
@@ -520,8 +521,8 @@ function ReconciliationPanel({ months, outstandingTile, reconciliation }: Reconc
       lhs: outstandingTile,
       rhs: activeOnly,
       note: Math.abs(unexplained) < 1
-        ? `Reconciles: tile − active = matured (${fmt(reconciliation.matured_disbursed)}) − FL basis Δ (${fmt(reconciliation.fl_basis_delta)})`
-        : `Unexplained Δ of ${fmt(unexplained)} beyond matured (${fmt(reconciliation.matured_disbursed)}) and FL basis (${fmt(reconciliation.fl_basis_delta)})`,
+        ? `Reconciles: tile − active = −FL basis Δ (${fmt(reconciliation.fl_basis_delta)}); matured loans are counted in both`
+        : `Unexplained Δ of ${fmt(unexplained)} beyond FL basis (${fmt(reconciliation.fl_basis_delta)})`,
     },
   ]
 

@@ -5,6 +5,17 @@ import { addMonths, format, parseISO, differenceInCalendarDays } from 'date-fns'
 import { CreditCard, AlertCircle, Search, Filter } from 'lucide-react'
 import { Loan, LoanType } from '@/lib/types'
 import { formatCurrency } from '@/lib/utils'
+import { ParentCompanyDropdown } from '@/components/ui/ParentCompanyDropdown'
+import { UNASSIGNED_PARENT_KEY } from '@/lib/calculator'
+
+// /api/loans enriches each Loan with parent_id (resolved via the same
+// borrower → parent attribution the engine uses) and parent_name (null
+// for UNASSIGNED). Kept on the page-local response shape so we don't
+// pollute the shared Loan type.
+interface LoanWithParent extends Loan {
+  parent_id?: string
+  parent_name?: string | null
+}
 
 // Calendar months between two month-dates (signed, matches calculator.ts).
 function monthsBetween(from: Date, to: Date): number {
@@ -48,11 +59,13 @@ const LOAN_TYPE_TO_CHIP = new Map<LoanType, FilterKey>()
 for (const c of CHIPS) for (const t of c.types) LOAN_TYPE_TO_CHIP.set(t, c.key)
 
 interface LoansResponse {
-  loans: Loan[]
+  loans: LoanWithParent[]
   versionLabel: string
   asOfDate: string | null
   startDate: string
   horizonMonths: number
+  parent_companies?: { id: string; name: string }[]
+  parent_loan_counts?: Record<string, number>
 }
 
 // Linear-ramp balance for a single loan in a given month.
@@ -107,6 +120,9 @@ export default function LoansPage() {
   const [error, setError]     = useState<string | null>(null)
   const [filter, setFilter]   = useState('')
   const [active, setActive]   = useState<Set<FilterKey>>(new Set(CHIPS.map(c => c.key)))
+  // null = "All parents" (no filter); non-null Set = explicit selection of
+  // parent_company ids (plus UNASSIGNED_PARENT_KEY for the catch-all).
+  const [selectedParents, setSelectedParents] = useState<Set<string> | null>(null)
   const [saving, setSaving]   = useState<Set<string>>(new Set())
 
   // PATCH a single FL release field (number_of_lots | release_period_months)
@@ -174,15 +190,22 @@ export default function LoansPage() {
       // out when not all chips are active.
       const chip = LOAN_TYPE_TO_CHIP.get(l.loan_type)
       if (!chip || !active.has(chip)) return false
+      // Parent multi-select gate. null = "all parents" (no-op). Loans without
+      // an attributed parent fall under UNASSIGNED_PARENT_KEY.
+      if (selectedParents !== null) {
+        const pid = l.parent_id ?? UNASSIGNED_PARENT_KEY
+        if (!selectedParents.has(pid)) return false
+      }
       if (!q) return true
       return (
         l.loan_number.toLowerCase().includes(q) ||
         l.borrower.toLowerCase().includes(q) ||
+        (l.parent_name ?? '').toLowerCase().includes(q) ||
         (l.loan_program ?? '').toLowerCase().includes(q) ||
         (l.development_name ?? '').toLowerCase().includes(q)
       )
     })
-  }, [data, filter, active])
+  }, [data, filter, active, selectedParents])
 
   // Per-month grand total across the filtered set.
   const monthTotals = useMemo(() => {
@@ -213,7 +236,7 @@ export default function LoansPage() {
     if (next.has(key)) next.delete(key); else next.add(key)
     setActive(next)
   }
-  const chipsFiltered = active.size < CHIPS.length
+  const chipsFiltered = active.size < CHIPS.length || selectedParents !== null
 
   return (
     <div className="p-6 space-y-4">
@@ -265,6 +288,12 @@ export default function LoansPage() {
           )
         })}
         <div className="flex items-center gap-1 ml-auto">
+          <ParentCompanyDropdown
+            parents={data.parent_companies ?? []}
+            parentLoanCounts={data.parent_loan_counts ?? {}}
+            selected={selectedParents}
+            onChange={setSelectedParents}
+          />
           <button onClick={() => setActive(new Set(CHIPS.map(c => c.key)))} className="btn-ghost text-[10px]">All</button>
           <button onClick={() => setActive(new Set())} className="btn-ghost text-[10px]">None</button>
         </div>
@@ -277,6 +306,7 @@ export default function LoansPage() {
               <tr>
                 <th className="sticky left-0 z-20 bg-surface">Loan #</th>
                 <th>Borrower</th>
+                <th className="min-w-[120px]">Parent</th>
                 <th>Program</th>
                 <th className="min-w-[88px]">Type</th>
                 <th className="text-right">Original</th>
@@ -298,7 +328,7 @@ export default function LoansPage() {
             <tbody>
               {filteredLoans.length === 0 ? (
                 <tr>
-                  <td colSpan={11 + months.length} className="text-center text-xs text-fg-dim py-8">
+                  <td colSpan={12 + months.length} className="text-center text-xs text-fg-dim py-8">
                     {filter || chipsFiltered ? 'No loans match the current filter.' : 'No loans imported.'}
                   </td>
                 </tr>
@@ -308,6 +338,9 @@ export default function LoansPage() {
                     {loan.loan_number}
                   </td>
                   <td className="text-fg">{loan.borrower}</td>
+                  <td className={`text-[10px] ${loan.parent_name ? 'text-fg' : 'text-fg-dim italic'}`}>
+                    {loan.parent_name ?? '—'}
+                  </td>
                   <td className="text-[10px]">{loan.loan_program || '—'}</td>
                   <td className="text-[10px]">
                     {loan.id ? (
@@ -389,7 +422,7 @@ export default function LoansPage() {
                   <td className="sticky left-0 z-10 bg-accent/10 uppercase text-[10px] tracking-wide">
                     Grand total
                   </td>
-                  <td colSpan={10} className="text-[10px] text-fg-dim">
+                  <td colSpan={11} className="text-[10px] text-fg-dim">
                     {filteredLoans.length} loan{filteredLoans.length === 1 ? '' : 's'}
                     {(filter || chipsFiltered) && ` (filtered from ${data.loans.length})`}
                   </td>

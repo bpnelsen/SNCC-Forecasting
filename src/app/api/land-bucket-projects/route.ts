@@ -5,6 +5,20 @@ import { createServiceClient } from '@/lib/supabase'
 // DB writes are reflected immediately on Vercel without a redeploy.
 export const dynamic = 'force-dynamic'
 
+// Supabase / PostgREST errors are plain objects; String(e) collapses them
+// to "[object Object]". Pull out the useful fields so the client banner
+// shows the real cause.
+function errMessage(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (e && typeof e === 'object') {
+    const o = e as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown }
+    const parts = [o.message, o.details, o.hint, o.code].filter(Boolean).map(String)
+    if (parts.length) return parts.join(' · ')
+    try { return JSON.stringify(e) } catch { /* fall through */ }
+  }
+  return String(e)
+}
+
 export async function GET() {
   try {
     const sb = createServiceClient()
@@ -15,7 +29,7 @@ export async function GET() {
     if (error) throw error
     return NextResponse.json(data ?? [])
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return NextResponse.json({ error: errMessage(e) }, { status: 500 })
   }
 }
 
@@ -52,6 +66,6 @@ export async function POST(req: NextRequest) {
     if (error) throw error
     return NextResponse.json(data)
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return NextResponse.json({ error: errMessage(e) }, { status: 500 })
   }
 }

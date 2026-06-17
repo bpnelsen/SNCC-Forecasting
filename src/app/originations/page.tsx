@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import {
-  ClipboardList, Plus, Save, Trash2, X, AlertCircle, CheckCircle, Pencil,
+  ClipboardList, Plus, Save, Trash2, X, AlertCircle, CheckCircle, Pencil, ChevronDown, ChevronRight,
 } from 'lucide-react'
 import { Builder, LoanProgram, LandBucketProject, NewOriginationEntry } from '@/lib/types'
 import { formatCurrency } from '@/lib/utils'
@@ -101,10 +101,14 @@ export default function OriginationsPage() {
     }
     setBusy(true); setMsg(null)
     try {
-      const url    = editing.id ? `/api/new-originations/${editing.id}` : '/api/new-originations'
-      const method = editing.id ? 'PUT' : 'POST'
+      // POST for both create AND update — Vercel rejects PUT with 405 on
+      // some setups (same fix as Land Bucket / A&D / etc.). The [id] route
+      // now exports a POST handler that performs the update.
+      const url = editing.id
+        ? `/api/new-originations/${editing.id}`
+        : '/api/new-originations'
       const res = await fetch(url, {
-        method, headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editing),
       })
       const text = await res.text()
@@ -138,7 +142,7 @@ export default function OriginationsPage() {
   const grand = sumEntries(entries)
 
   return (
-    <div className="p-6 space-y-6 max-w-6xl">
+    <div className="p-6 space-y-6 max-w-[1227px]">
       <div className="flex items-center justify-between fade-up fade-up-1">
         <div>
           <h1 className="text-lg font-medium text-fg-strong flex items-center gap-2">
@@ -164,6 +168,8 @@ export default function OriginationsPage() {
           {msg.text}
         </div>
       )}
+
+      <DrawCurveShortcut programs={programs} onPrograms={setPrograms} onSaved={load} />
 
       <div className="card fade-up fade-up-2">
         <div className="overflow-x-auto">
@@ -343,7 +349,18 @@ function BuilderBlock({
                   <td className="num">{t.count}</td>
                   <td className="num">{formatCurrency(e.avg_loan_amount, true)}</td>
                   <td className="num">{formatCurrency(t.amount, true)}</td>
-                  <td>{prog?.name ?? <span className="text-fg-dim">builder default</span>}</td>
+                  <td>
+                    {prog ? (
+                      <>
+                        <div>{prog.name}</div>
+                        <div className="text-[10px] text-fg-dim">
+                          {prog.draw_curve.length} mo · {Math.round(prog.draw_curve.reduce((a, b) => a + b, 0) * 100)}%
+                        </div>
+                      </>
+                    ) : (
+                      <span className="text-fg-dim">builder default</span>
+                    )}
+                  </td>
                   <td className="num">
                     {e.interest_rate != null
                       ? `${(e.interest_rate * 100).toFixed(2)}%`
@@ -351,14 +368,16 @@ function BuilderBlock({
                         ? <span className="text-fg-dim">{(prog.default_rate * 100).toFixed(2)}%</span>
                         : <span className="text-fg-dim">program</span>}
                   </td>
-                  <td className="flex gap-1">
-                    <button onClick={() => onEdit(e)} className="btn-ghost">
-                      <Pencil className="w-3 h-3" />
-                    </button>
-                    <button onClick={() => onDelete(e)} disabled={busy}
-                            className="btn-ghost text-danger">
-                      <Trash2 className="w-3 h-3" />
-                    </button>
+                  <td>
+                    <div className="flex gap-1 justify-end">
+                      <button onClick={() => onEdit(e)} className="btn-ghost" title="Edit entry">
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                      <button onClick={() => onDelete(e)} disabled={busy}
+                              className="btn-ghost text-danger" title="Delete entry">
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               )
@@ -635,6 +654,186 @@ function ScheduleGrid({
       </div>
       <div className="text-[10px] text-fg-dim mt-1 italic">
         A Total Lots Cap still applies on top of this schedule (whichever stops first).
+      </div>
+    </div>
+  )
+}
+
+// ─── Draw Curve shortcut ────────────────────────────────────────────────────
+// Inline editor for the two construction loan programs the New Originations
+// flow most often uses. Same data as Assumptions → Loan Programs; edits here
+// hit the same /api/loan-programs POST endpoint, so the next forecast load
+// picks up the new curve everywhere.
+
+function DrawCurveShortcut({
+  programs, onPrograms, onSaved,
+}: {
+  programs: LoanProgram[]
+  onPrograms: (next: LoanProgram[]) => void
+  onSaved: () => Promise<void> | void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg]   = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+  // Collapsed by default — the per-month grids are bulky and most page
+  // visits don't need to edit the curve. Click the header to expand.
+  const [open, setOpen] = useState(false)
+
+  const targets = programs.filter(p => p.name === 'SFR Construction' || p.name === 'MFR Construction')
+
+  const patch = (id: string, draw_curve: number[]) => {
+    onPrograms(programs.map(p => p.id === id ? { ...p, draw_curve } : p))
+  }
+
+  const save = async () => {
+    setBusy(true); setMsg(null)
+    try {
+      const res = await fetch('/api/loan-programs', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(programs),
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        let body: { error?: unknown } | null = null
+        try { body = text ? JSON.parse(text) : null } catch { /* keep raw */ }
+        const err = body?.error
+        const m = typeof err === 'string' ? err
+                : err ? JSON.stringify(err)
+                : (text || `${res.status} ${res.statusText}`)
+        throw new Error(m)
+      }
+      setMsg({ type: 'ok', text: 'Draw curves saved.' })
+      await onSaved()
+    } catch (e) {
+      setMsg({ type: 'err', text: e instanceof Error ? e.message : 'Save failed' })
+    } finally { setBusy(false) }
+  }
+
+  if (targets.length === 0) {
+    return (
+      <div className="card fade-up fade-up-1.5 p-4">
+        <div className="text-sm font-medium text-fg-strong mb-1">SFR / MFR Construction Draw Curves</div>
+        <div className="text-xs text-fg-dim italic">
+          No SFR Construction or MFR Construction programs found in loan_programs.
+          Run <code>supabase/migrations/002_modular_assumptions.sql</code>.
+        </div>
+      </div>
+    )
+  }
+
+  // Header summary so the collapsed state still tells you what's inside.
+  const summary = targets
+    .map(p => `${p.name.replace(' Construction', '')}: ${p.draw_curve.length} mo · ${Math.round(p.draw_curve.reduce((a, b) => a + b, 0) * 100)}%`)
+    .join(' · ')
+
+  return (
+    <div className="card fade-up fade-up-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="w-full card-header flex items-center justify-between hover:bg-border/30 transition-colors"
+        aria-expanded={open}
+      >
+        <span className="flex items-center gap-2">
+          {open ? <ChevronDown className="w-3.5 h-3.5 text-fg-dim" /> : <ChevronRight className="w-3.5 h-3.5 text-fg-dim" />}
+          <span className="card-title">SFR / MFR Construction Draw Curves</span>
+          {!open && <span className="text-[10px] text-fg-dim font-mono ml-2">{summary}</span>}
+        </span>
+        {open && (
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={e => { e.stopPropagation(); save() }}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); save() } }}
+            aria-disabled={busy}
+            className={`btn-primary text-[10px] ${busy ? 'opacity-60 cursor-not-allowed' : ''}`}
+          >
+            <Save className="w-3 h-3" /> {busy ? 'Saving…' : 'Save Curves'}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div className="p-4 space-y-4 border-t border-border">
+          <p className="text-[10px] text-fg-dim">
+            Shortcut to the same loan-program rows you'd edit on Assumptions. Changes
+            apply to every New Originations entry assigned to that program.
+          </p>
+
+          {msg && (
+            <div className={`flex items-center gap-2 text-xs p-2 rounded border ${
+              msg.type === 'ok'
+                ? 'bg-success/10 border-success/30 text-success-light'
+                : 'bg-danger-strong/10 border-danger-strong/30 text-danger'
+            }`}>
+              {msg.type === 'ok' ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+              {msg.text}
+            </div>
+          )}
+
+          {targets.map(p => (
+            <DrawCurveGrid key={p.id} program={p} onChange={curve => patch(p.id, curve)} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DrawCurveGrid({
+  program, onChange,
+}: {
+  program: LoanProgram
+  onChange: (curve: number[]) => void
+}) {
+  const count = Math.max(24, program.draw_curve.length)
+  const sumPct = program.draw_curve.reduce((a, b) => a + b, 0) * 100
+  return (
+    <div className="border border-border-strong rounded-lg p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-xs font-medium text-fg">{program.name}</div>
+          <div className="text-[10px] text-fg-dim">
+            Product type: {program.product_type} · default rate {(program.default_rate * 100).toFixed(2)}%
+            · term {program.default_term_months} mo
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            className="btn-ghost text-[10px] px-1.5 py-0.5"
+            onClick={() => onChange(Array.from({ length: count + 1 }, (_, j) => program.draw_curve[j] ?? 0))}
+          >+ Month</button>
+          <button
+            type="button"
+            className="btn-ghost text-[10px] px-1.5 py-0.5 disabled:opacity-40"
+            disabled={count <= 24}
+            onClick={() => {
+              if (count <= 24) return
+              onChange(program.draw_curve.slice(0, count - 1))
+            }}
+          >− Month</button>
+        </div>
+      </div>
+      <div className="grid grid-cols-4 md:grid-cols-6 gap-2">
+        {Array.from({ length: count }, (_, i) => (
+          <div key={i}>
+            <div className="text-[10px] text-fg-dim mb-0.5 text-center">M{i + 1}</div>
+            <input
+              type="number" step="1" min="0"
+              className="form-input text-right text-xs"
+              value={Math.round((program.draw_curve[i] ?? 0) * 100)}
+              onChange={e => {
+                const pct = Math.round(Number(e.target.value))
+                const next = Array.from({ length: count }, (_, j) => program.draw_curve[j] ?? 0)
+                next[i] = !isFinite(pct) || pct < 0 ? 0 : pct / 100
+                onChange(next)
+              }}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="text-[10px] text-fg-dim">
+        Months: {count} · sum: {Math.round(sumPct)}%
       </div>
     </div>
   )

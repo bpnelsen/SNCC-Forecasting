@@ -86,7 +86,7 @@ export default function HHHJVPage() {
   if (loading) return <div className="p-6 text-fg-dim text-sm">Loading…</div>
 
   return (
-    <div className="p-6 space-y-6 max-w-6xl">
+    <div className="p-6 space-y-6 max-w-[1227px]">
       <div className="flex items-center justify-between fade-up fade-up-1">
         <div>
           <h1 className="text-lg font-medium text-fg-strong flex items-center gap-2">
@@ -417,10 +417,12 @@ function BuilderGroup({
             <td>{lp?.name ?? <span className="text-fg-dim">—</span>}</td>
             <td className="text-[10px] font-mono">{p.dev_start_date ?? '—'}</td>
             <td className="text-[10px] font-mono">{p.dev_end_date ?? '—'}</td>
-            <td className="flex gap-1">
-              <button onClick={() => onEdit(p)} className="btn-ghost"><Pencil className="w-3 h-3" /></button>
-              <button onClick={() => onDelete(p)} disabled={busy}
-                      className="btn-ghost text-danger"><Trash2 className="w-3 h-3" /></button>
+            <td>
+              <div className="flex gap-1 justify-end">
+                <button onClick={() => onEdit(p)} className="btn-ghost" title="Edit"><Pencil className="w-3 h-3" /></button>
+                <button onClick={() => onDelete(p)} disabled={busy}
+                        className="btn-ghost text-danger" title="Delete"><Trash2 className="w-3 h-3" /></button>
+              </div>
             </td>
           </tr>
         )

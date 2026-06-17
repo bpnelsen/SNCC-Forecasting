@@ -87,7 +87,7 @@ export default function AssumptionsPage() {
   if (!data)   return null
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl">
+    <div className="p-6 space-y-6 max-w-[971px]">
       <div className="flex items-center justify-between fade-up fade-up-1">
         <div>
           <h1 className="text-lg font-medium text-fg-strong flex items-center gap-2">

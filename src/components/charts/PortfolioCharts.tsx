@@ -82,7 +82,7 @@ export function LandBucketProjectionChart({ data, projects }: LandBucketProjecti
   )
 }
 
-export function TotalBalanceChart({ data }: ChartProps) {
+export function TotalBalanceChart({ data, yAxisFloor = 0 }: ChartProps & { yAxisFloor?: number }) {
   return (
     <ResponsiveContainer width="100%" height={220}>
       <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
@@ -98,8 +98,14 @@ export function TotalBalanceChart({ data }: ChartProps) {
         </defs>
         <CartesianGrid strokeDasharray="3 3" stroke={CHROME.grid} vertical={false} />
         <XAxis dataKey="label" tick={{ fill: CHROME.text, fontSize: 10 }} tickLine={false} axisLine={false} />
+        {/* yAxisFloor lets the dashboard clip the baseline above 0 on the
+            unfiltered view so month-over-month movement is readable. Falls
+            back to 0 (the default) under any filter so smaller portfolios
+            don't disappear under the floor. allowDataOverflow keeps Recharts
+            from auto-expanding the domain back down to fit lower series. */}
         <YAxis tick={{ fill: CHROME.text, fontSize: 10 }} tickLine={false} axisLine={false}
-               tickFormatter={v => formatCurrency(v, true)} width={55} />
+               tickFormatter={v => formatCurrency(v, true)} width={55}
+               domain={[yAxisFloor, 'auto']} allowDataOverflow={yAxisFloor > 0} />
         <Tooltip content={<CustomTooltip />} />
         <Area type="monotone" dataKey="total_all"   name="Total ALL"    stroke={CHROME.accent} strokeWidth={2}   fill="url(#goldGrad)" />
         <Area type="monotone" dataKey="total_loans" name="Active Loans" stroke="#58A6FF" strokeWidth={1.5} fill="url(#azureGrad)" strokeDasharray="4 2" />

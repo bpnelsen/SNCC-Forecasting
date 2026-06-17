@@ -266,20 +266,36 @@ function projectExistingLoanBalance(
   return maxAmount > 0 ? maxAmount : 0
 }
 
-// Outstanding (cash actually drawn) for an existing loan. Held flat at
-// loan_amount_disbursed across the whole horizon — matured loans STAY on
-// the books so the Monthly Summary "Active <seg>" rows match the Active
-// Loan (Outstanding) tile, which sums disbursed without a maturity check.
-// Payoffs detection still runs against projectExistingLoanBalance (face,
-// gated at maturity) so the Forecast page's Payoffs column still fires
-// when a loan matures during the horizon.
-// FINISHED_LOTS: linear paydown still applies, independent of the
-// matured/active distinction.
+// Outstanding (cash actually drawn) for an existing loan.
+//
+// Month 0 (the current horizon month) always includes the loan at its
+// disbursed amount — matured or not — so the Monthly Summary's
+// "Active <seg>" rows match the Active Loan (Outstanding) tile, which
+// has no maturity check.
+//
+// For month 1+ the maturity gate applies normally: a loan whose
+// current_loan_due_date has passed the current month's date returns 0
+// for that month and every future month. That gives the segment rows
+// the natural month-over-month decay an analyst expects in a forecast.
+//
+// Payoffs detection still runs against projectExistingLoanBalance
+// (face, gated at maturity from day one) so the Forecast page's
+// Payoffs column lights up the month a loan matures, even matures
+// that already happened before the forecast start.
+//
+// FINISHED_LOTS: linear paydown rule applies independent of maturity.
 function projectExistingLoanOutstanding(loan: Loan, monthDate: Date, startDate: Date): number {
   if (loan.loan_type === 'FINISHED_LOTS') {
     const start = Math.max(loan.loan_amount_disbursed, loan.current_loan_amount, 0)
     const i = monthsBetween(startDate, monthDate)
     return Math.max(0, start - finishedLotsReleasedByMonth(loan, i))
+  }
+  const isMonthZero =
+    monthDate.getFullYear() === startDate.getFullYear() &&
+    monthDate.getMonth() === startDate.getMonth()
+  if (!isMonthZero && loan.current_loan_due_date) {
+    const dueDate = parseISO(loan.current_loan_due_date)
+    if (monthDate >= dueDate) return 0
   }
   return loan.loan_amount_disbursed > 0 ? loan.loan_amount_disbursed : 0
 }

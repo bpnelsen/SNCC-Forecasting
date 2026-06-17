@@ -300,11 +300,15 @@ export default function LoansPage() {
       </div>
 
       <div className="card fade-up fade-up-2">
-        <div className="overflow-x-auto">
+        {/* Fixed 1200px scroll viewport so the table doesn't grow the
+            outer document — long loan books scroll inside the card
+            instead of pushing the chip strip + parent filter off the top
+            of the viewport. */}
+        <div className="overflow-auto max-h-[1200px]">
           <table className="data-table">
-            <thead>
+            <thead className="sticky top-0 z-30 bg-surface">
               <tr>
-                <th className="sticky left-0 z-20 bg-surface">Loan #</th>
+                <th className="sticky left-0 z-40 bg-surface">Loan #</th>
                 <th>Borrower</th>
                 <th className="min-w-[120px]">Parent</th>
                 <th>Program</th>

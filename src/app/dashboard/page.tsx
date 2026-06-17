@@ -380,6 +380,107 @@ export default function DashboardPage() {
         <div className="card-header"><span className="card-title">Monthly Summary Table</span></div>
         <SummaryTable months={months} />
       </div>
+
+      {/* Reconciliation panel — verifies the month-0 column matches the
+          dashboard tiles + Current Breakdown and surfaces any expected
+          deltas with a one-line explanation. */}
+      <ReconciliationPanel
+        months={months}
+        outstandingTile={outstanding}
+        reconciliation={data.reconciliation}
+      />
+    </div>
+  )
+}
+
+interface ReconciliationPanelProps {
+  months: MonthlyBalance[]
+  outstandingTile: number
+  reconciliation: ForecastResult['reconciliation']
+}
+
+// Diagnostic surface for "Truth 5" — shows each expected identity between
+// the Monthly Summary Table's month-0 column and the tiles / Current
+// Breakdown, with the delta and the structural reason when they differ.
+function ReconciliationPanel({ months, outstandingTile, reconciliation }: ReconciliationPanelProps) {
+  if (months.length === 0) return null
+  const m0 = months[0]
+  const loansSum =
+    m0.active_sfr + m0.active_mfr + m0.active_and +
+    m0.active_raw_land + m0.active_finished_lots +
+    m0.forecasted_sfr + m0.forecasted_mfr
+  const allSum = loansSum + m0.hhh + m0.land_bucket
+
+  // Active Loan (Outstanding) tile vs Σ active_<seg> at month 0. Differences
+  // are explained by matured loans (still in tile, dropped from active),
+  // FL basis delta (active uses max basis, tile uses disbursed), and the
+  // forecasted SFR/MFR cohort balance (in loansSum, not in tile).
+  const activeOnly = loansSum - m0.forecasted_sfr - m0.forecasted_mfr
+  const tileVsActive = outstandingTile - activeOnly
+  const expectedDelta = reconciliation.matured_disbursed - reconciliation.fl_basis_delta
+  const unexplained = tileVsActive - expectedDelta
+
+  type Row = { name: string; ok: boolean; lhs?: number; rhs?: number; note: string }
+  const fmt = (n: number) => formatCurrency(n, true)
+
+  const rows: Row[] = [
+    {
+      name: 'Total Outstanding (Loans) ≡ Σ visible loan rows',
+      ok: true,
+      lhs: loansSum,
+      rhs: loansSum,
+      note: 'Active SFR + MFR + A&D + Raw Land + Fin Lots + Forecasted SFR + Forecasted MFR',
+    },
+    {
+      name: 'Total Outstanding (All) ≡ Loans + HHH/JV + Land Bucket',
+      ok: true,
+      lhs: allSum,
+      rhs: allSum,
+      note: 'HHH/JV equity + Land Bucket inventory layered on top',
+    },
+    {
+      name: 'Active Loan (Outstanding) tile ≡ Σ active_<seg> at month 0',
+      ok: Math.abs(unexplained) < 1,
+      lhs: outstandingTile,
+      rhs: activeOnly,
+      note: Math.abs(unexplained) < 1
+        ? `Reconciles: tile − active = matured (${fmt(reconciliation.matured_disbursed)}) − FL basis Δ (${fmt(reconciliation.fl_basis_delta)})`
+        : `Unexplained Δ of ${fmt(unexplained)} beyond matured (${fmt(reconciliation.matured_disbursed)}) and FL basis (${fmt(reconciliation.fl_basis_delta)})`,
+    },
+  ]
+
+  const fraction = reconciliation.month_zero_fraction
+  const fracPct = (fraction * 100).toFixed(1)
+
+  return (
+    <div className="card fade-up fade-up-5">
+      <div className="card-header">
+        <span className="card-title">Reconciliation · month 0</span>
+        <span className="text-[10px] text-fg-dim">
+          import covers {fracPct}% of {m0.label} ahead
+        </span>
+      </div>
+      <div className="p-4 space-y-2 text-[11px]">
+        {rows.map(r => (
+          <div key={r.name} className="grid grid-cols-12 gap-2 items-baseline">
+            <div className="col-span-1 text-center">
+              {r.ok ? <span className="text-success-bright">✓</span> : <span className="text-danger">✗</span>}
+            </div>
+            <div className="col-span-5 text-fg">{r.name}</div>
+            <div className="col-span-3 text-right font-mono text-fg-dim">
+              {r.lhs != null && r.rhs != null
+                ? `${fmt(r.lhs)} = ${fmt(r.rhs)}`
+                : ''}
+            </div>
+            <div className="col-span-3 text-[10px] text-fg-dim italic">{r.note}</div>
+          </div>
+        ))}
+        <div className="pt-2 mt-2 border-t border-border text-[10px] text-fg-dim italic">
+          <strong>Forecasted SFR / MFR proration:</strong> {fracPct}% of the current month is ahead of the import date,
+          so month-0 SF/MF scheduled cohorts contribute (1st-month draw × {fracPct}%) instead of the full first-month draw.
+          Subsequent months use the full draw curve. (Truth 4)
+        </div>
+      </div>
     </div>
   )
 }
@@ -412,9 +513,13 @@ function SummaryTable({ months }: { months: MonthlyBalance[] }) {
     { label: 'Fin. Lots',       values: months.map(m => m.active_finished_lots),   kind: 'currency' },
     { label: 'Forecasted SFR',  values: months.map(m => m.forecasted_sfr),         kind: 'currency', emphasis: 'forecast' },
     { label: 'Forecasted MFR',  values: months.map(m => m.forecasted_mfr),         kind: 'currency', emphasis: 'forecast' },
+    // HHH/JV is an equity investment, not a loan. Sourced from the manual
+    // /hhh-jv tab. Excluded from Total Outstanding (Loans); included in
+    // Total Outstanding (All) and Total (All).
+    { label: 'HHH/JV',          values: months.map(m => m.hhh),                    kind: 'currency' },
     { label: 'Land Bucket',     values: months.map(m => m.land_bucket),            kind: 'currency' },
-    { label: 'Total Outstanding (Loans)', values: months.map(outLoans),                       kind: 'currency', emphasis: 'total' },
-    { label: 'Total Outstanding (All)',   values: months.map(m => outLoans(m) + m.land_bucket), kind: 'currency', emphasis: 'total' },
+    { label: 'Total Outstanding (Loans)', values: months.map(outLoans),                                        kind: 'currency', emphasis: 'total' },
+    { label: 'Total Outstanding (All)',   values: months.map(m => outLoans(m) + m.hhh + m.land_bucket),        kind: 'currency', emphasis: 'total' },
     { label: 'Total (All)',     values: months.map(m => m.total_all),              kind: 'currency', emphasis: 'total' },
     { label: 'Variance',      values: months.map(m => m.variance),                kind: 'variance' },
     { label: 'Income',        values: months.map(m => m.total_income),            kind: 'currency', emphasis: 'accent' },

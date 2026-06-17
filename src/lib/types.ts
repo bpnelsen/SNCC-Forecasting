@@ -214,6 +214,25 @@ export interface ForecastResult {
   // + scheduled /originations entries) under its source project so the user
   // can see counts and drawn balance broken out development-by-development.
   new_origination_projects: OriginationProjectDetail[]
+  // Diagnostic fields surfaced for the dashboard's Reconciliation panel.
+  // Lets the UI explain why some identities may not balance to the cent.
+  reconciliation: {
+    // Fraction of the current calendar month still ahead of as_of_date
+    // (Truth 4). 0.5 means import was at the half-way point. month-0
+    // Forecasted SFR/MFR is scaled by this.
+    month_zero_fraction: number
+    // Σ loan_amount_disbursed across imported loans whose maturity date is
+    // strictly before the as_of_date. These contribute to the Active Loan
+    // (Outstanding) tile (sumDisbursed has no maturity gate) but NOT to
+    // m.active_<seg> at month 0 (projectExistingLoanOutstanding zeroes
+    // matured loans). That delta explains "why tile > Monthly Summary".
+    matured_disbursed: number
+    // Δ between sumExistingOut(FL loans) at month 0 and sumDisbursed(FL).
+    // FL loans where current_loan_amount > loan_amount_disbursed start the
+    // engine projection above their disbursed amount; the dashboard tile
+    // uses disbursed flat. Usually small but documented for traceability.
+    fl_basis_delta: number
+  }
 }
 
 export type OriginationSegment = 'sfr' | 'mfr' | 'raw_land' | 'and' | 'finished_lots' | 'hhh'

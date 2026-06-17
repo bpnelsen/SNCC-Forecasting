@@ -415,11 +415,46 @@ function projectAAndDLoan(
 }
 
 // Lot-driven origination cohort balance at month index `m`.
-function lotOriginationBalance(orig: LotOrigination, m: number): number {
+//
+// monthZeroFraction (default 1) prorates the month-0 contribution of SF/MF
+// cohorts originating in month 0 by the % of the current month still ahead
+// of the import date. Dashboard tile "Forecasted SFR/MFR" shows the
+// post-import portion of month 0 — per Truth 4 spec.
+function lotOriginationBalance(
+  orig: LotOrigination,
+  m: number,
+  monthZeroFraction: number = 1,
+): number {
   const age = m - orig.origination_month_idx
   if (age < 0) return 0
   if (age >= orig.program.default_term_months) return 0
-  return orig.count * orig.max_amount_per_loan * cumulativeDraw(orig.program.draw_curve, age)
+  const base = orig.count * orig.max_amount_per_loan * cumulativeDraw(orig.program.draw_curve, age)
+  if (
+    m === 0 &&
+    orig.origination_month_idx === 0 &&
+    (orig.program.product_type === 'SF' || orig.program.product_type === 'MF')
+  ) {
+    return base * monthZeroFraction
+  }
+  return base
+}
+
+// Percent of the current calendar month still ahead of the import date.
+// Jun 15 in a 30-day June → (30 - 15) / 30 = 0.5.
+//
+// Returns 1 if `asOfDate` isn't in the same calendar month as the horizon's
+// month 0 — the partial-month proration only makes sense when month 0 IS
+// the import's month. If you uploaded last month, month 0 here is a fresh
+// future month and gets the full first-month draw.
+function monthZeroFraction(asOfDate: string, monthZeroStart: Date): number {
+  const asOf = parseISO(asOfDate)
+  if (asOf.getFullYear() !== monthZeroStart.getFullYear() ||
+      asOf.getMonth() !== monthZeroStart.getMonth()) {
+    return 1
+  }
+  const dayOfMonth = asOf.getDate()
+  const daysInMonth = new Date(asOf.getFullYear(), asOf.getMonth() + 1, 0).getDate()
+  return Math.max(0, Math.min(1, (daysInMonth - dayOfMonth) / daysInMonth))
 }
 
 // ─── Orchestrator ────────────────────────────────────────────────────────────
@@ -450,6 +485,10 @@ export function runForecast(input: ForecastInput): ForecastResult {
   const thisMonth = startOfMonth(new Date())
   const startDate = isBefore(storedStart, thisMonth) ? thisMonth : storedStart
   const months = generateMonths(startDate, input.settings.horizon_months)
+  // Fraction of the current calendar month still ahead of the import date
+  // (Truth 4): SF/MF cohorts originating in month 0 are scaled by this so
+  // the Forecasted SFR/MFR rollups show the post-import portion only.
+  const m0Frac = monthZeroFraction(input.asOfDate, months[0].date)
 
   const buildersById = new Map(input.builders.map(b => [b.id, b]))
   const programsById = new Map(input.loanPrograms.map(p => [p.id, p]))
@@ -709,12 +748,12 @@ export function runForecast(input: ForecastInput): ForecastResult {
         newOrigsBySeg[seg].count  += orig.count
         newOrigsBySeg[seg].amount += orig.count * orig.max_amount_per_loan
       }
-      const bal = lotOriginationBalance(orig, i)
+      const bal = lotOriginationBalance(orig, i, m0Frac)
       if (bal === 0) continue
       newBySegmentScheduled[seg] += bal
     }
     for (const orig of allOriginations) {
-      const bal = lotOriginationBalance(orig, i)
+      const bal = lotOriginationBalance(orig, i, m0Frac)
       if (bal === 0) continue
       newBySegment[PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]] += bal
     }
@@ -786,7 +825,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
 
     const scheduledIdSet = new Set(scheduledOriginations)
     for (const orig of allOriginations) {
-      const bal = lotOriginationBalance(orig, i)
+      const bal = lotOriginationBalance(orig, i, m0Frac)
       if (bal === 0) continue
       const seg = PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]
       const pid = parentIdForBuilder(orig.builder_id)
@@ -891,7 +930,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     let yield_projected = 0
     for (const orig of allOriginations) {
       const rate = orig.rate_override ?? orig.program.default_rate
-      yield_projected += lotOriginationBalance(orig, i) * rate / 12
+      yield_projected += lotOriginationBalance(orig, i, m0Frac) * rate / 12
     }
     const yield_land_bucket = lb.totals[i].interest_income
     // HHH/JV projects: while between dev_start_date and dev_end_date, they
@@ -1066,7 +1105,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
           count += orig.count
           committed_amount += orig.count * orig.max_amount_per_loan
         }
-        outstanding += lotOriginationBalance(orig, i)
+        outstanding += lotOriginationBalance(orig, i, m0Frac)
       }
       return { count, committed_amount, outstanding }
     })
@@ -1119,5 +1158,33 @@ export function runForecast(input: ForecastInput): ForecastResult {
     parent_companies: input.parentCompanies.map(p => ({ id: p.id, name: p.name })),
     parent_loan_counts: Object.fromEntries(loanCountByParent),
     new_origination_projects: newOriginationProjects,
+    reconciliation: {
+      month_zero_fraction: m0Frac,
+      // Loans whose maturity date is strictly before as_of_date — those
+      // contribute to the Active Loan (Outstanding) tile but not to the
+      // engine's month-0 active_<seg> projection.
+      matured_disbursed: (() => {
+        const asOf = parseISO(input.asOfDate)
+        let sum = 0
+        for (const l of input.loans) {
+          if (!l.current_loan_due_date) continue
+          if (parseISO(l.current_loan_due_date) < asOf) {
+            sum += l.loan_amount_disbursed || 0
+          }
+        }
+        return sum
+      })(),
+      // FL basis delta: sumExistingOut at month 0 vs sumDisbursed for FL only.
+      // FL uses max(disbursed, current_loan_amount) as the start basis; tile
+      // uses disbursed.
+      fl_basis_delta: (() => {
+        let sum = 0
+        for (const l of loansByType.FINISHED_LOTS) {
+          const start = Math.max(l.current_loan_amount, l.loan_amount_disbursed, 0)
+          sum += start - (l.loan_amount_disbursed || 0)
+        }
+        return sum
+      })(),
+    },
   }
 }

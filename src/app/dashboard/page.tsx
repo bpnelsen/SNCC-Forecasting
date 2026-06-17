@@ -6,7 +6,8 @@ import { StatCard } from '@/components/ui/StatCard'
 import { TotalBalanceChart, PortfolioStackedChart, IncomeChart, VarianceChart } from '@/components/charts/PortfolioCharts'
 import { ForecastResult, MonthlyBalance } from '@/lib/types'
 import { formatCurrency, formatPct, formatVariance } from '@/lib/utils'
-import { RefreshCw, AlertCircle, Filter, Building2, Check, ChevronDown } from 'lucide-react'
+import { RefreshCw, AlertCircle, Filter, Building2, Check, ChevronDown, MessageSquare } from 'lucide-react'
+import Link from 'next/link'
 
 // Key the engine uses for loans whose borrower doesn't match any parent
 // company (no explicit override and no pattern hit). Kept in sync with
@@ -242,9 +243,14 @@ export default function DashboardPage() {
             {data.version_label} · {data.total_active_loans} active loans · As of {formatAsOf(data.as_of_date)}
           </p>
         </div>
-        <button onClick={load} className="btn-ghost flex items-center gap-1.5">
-          <RefreshCw className="w-3.5 h-3.5" /><span>Refresh</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <Link href="/ask" className="btn-ghost flex items-center gap-1.5">
+            <MessageSquare className="w-3.5 h-3.5" /><span>Ask</span>
+          </Link>
+          <button onClick={load} className="btn-ghost flex items-center gap-1.5">
+            <RefreshCw className="w-3.5 h-3.5" /><span>Refresh</span>
+          </button>
+        </div>
       </div>
 
       {/* Filter strip */}

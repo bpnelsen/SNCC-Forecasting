@@ -7,10 +7,11 @@ export const runtime = 'nodejs'
 // Loop over tool calls can take several seconds; bump above Vercel's default.
 export const maxDuration = 60
 
-// Gemini 3 Flash — Google's current free-tier flagship for fast tool-use
-// agents. Falls back to gemini-2.5-flash if your account doesn't have
-// 3 Flash GA yet; either way the API surface is identical.
-const MODEL_ID = 'gemini-3-flash'
+// Gemini 2.5 Flash — Google's current free-tier flagship for tool-use
+// agents (and the highest-numbered flash GA on the free tier as of writing).
+// To check what's available to your key, hit:
+//   https://generativelanguage.googleapis.com/v1beta/models?key=$GEMINI_API_KEY
+const MODEL_ID = 'gemini-2.5-flash'
 
 // Cap the agentic loop. Five passes is enough for any analytical question
 // that needs more than one tool call without runaway loops.

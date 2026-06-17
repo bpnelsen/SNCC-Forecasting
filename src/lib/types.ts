@@ -210,6 +210,24 @@ export interface ForecastResult {
   // '__none__' = unassigned. The dashboard renders the dropdown from these.
   parent_companies: Array<{ id: string; name: string }>
   parent_loan_counts: Record<string, number>
+  // Active imported-loan counts per segment, for the Current Breakdown
+  // tile's $/# toggle. OTC folds into SFR (matches engine rollup).
+  active_loan_counts: {
+    sfr: number
+    mfr: number
+    and: number
+    raw_land: number
+    finished_lots: number
+  }
+  // Same per parent so the # view respects the parent filter.
+  // Key '__none__' = unassigned, matching parent_loan_counts.
+  active_loan_counts_by_parent: Record<string, {
+    sfr: number
+    mfr: number
+    and: number
+    raw_land: number
+    finished_lots: number
+  }>
   // Imported A&D loans (loan_type === 'A&D' from the Current Report) projected
   // flat-until-maturity. Surfaced so the A&D tab can show them alongside
   // forward-planned A&D loans without changing how the engine values them.

@@ -180,6 +180,10 @@ export default function DashboardPage() {
   // null = no parent filter (show all); a non-null Set selects specific
   // parent_company ids (plus UNASSIGNED_PARENT_KEY for the catch-all).
   const [selectedParents, setSelectedParents] = useState<Set<string> | null>(null)
+  // Current Breakdown $/# toggle. $ = dollar amounts (the default,
+  // matches every prior version); # = count of imported loans per
+  // segment, respecting the parent + chip filters.
+  const [breakdownMode, setBreakdownMode] = useState<'dollar' | 'count'>('dollar')
 
   const load = async () => {
     setLoading(true); setError(null)
@@ -334,42 +338,97 @@ export default function DashboardPage() {
         </div>
 
         <div className="card">
-          <div className="card-header"><span className="card-title">Current Breakdown</span></div>
+          <div className="card-header flex items-center justify-between">
+            <span className="card-title">Current Breakdown</span>
+            {/* $/# toggle. $ shows dollar balances (default); # shows
+                count of imported loans per segment, summed across
+                whichever parents are selected. Forecasted / HHH/JV /
+                Land Bucket rows hide in # mode — they're not loans. */}
+            <div className="inline-flex items-center gap-0.5 border border-border rounded-md p-0.5">
+              <button
+                onClick={() => setBreakdownMode('dollar')}
+                className={`px-2 py-0.5 text-[10px] font-mono rounded
+                            ${breakdownMode === 'dollar'
+                              ? 'bg-accent text-accent-on'
+                              : 'text-fg-dim hover:text-fg'}`}
+                title="Dollar balances"
+              >$</button>
+              <button
+                onClick={() => setBreakdownMode('count')}
+                className={`px-2 py-0.5 text-[10px] font-mono rounded
+                            ${breakdownMode === 'count'
+                              ? 'bg-accent text-accent-on'
+                              : 'text-fg-dim hover:text-fg'}`}
+                title="Loan count"
+              >#</button>
+            </div>
+          </div>
           <div className="p-4 space-y-2">
-            {[
-              // Base rows are imported active loans only (m.active_<seg>);
-              // forecasted SFR/MFR cohorts get their own banded rows below
-              // so the slices never overlap. Matches the Monthly Summary
-              // table semantics one-for-one.
-              { label: 'SFR',            value: current.active_sfr,           color: '#58A6FF' },
-              { label: 'MFR',            value: current.active_mfr,           color: '#D4A853' },
-              { label: 'A&D',            value: current.active_and,           color: '#3FB950' },
-              { label: 'Raw Land',       value: current.active_raw_land,      color: '#8B949E' },
-              { label: 'Finished Lots',  value: current.active_finished_lots, color: '#A371F7' },
-              { label: 'HHH/JV',         value: current.hhh,            color: '#F85149' },
-              { label: 'Land Bucket',    value: current.land_bucket,    color: '#79C0FF' },
-              { label: 'Forecasted SFR', value: current.forecasted_sfr, color: '#8B949E', forecast: true },
-              { label: 'Forecasted MFR', value: current.forecasted_mfr, color: '#8B949E', forecast: true },
-              { label: 'Forecasted A&D', value: current.forecasted_and + current.a_and_d_planned, color: '#8B949E', forecast: true },
-            ].filter(r => r.value > 0).map(row => {
-              const pct = current.total_all > 0 ? row.value / current.total_all : 0
-              return (
-                <div key={row.label}
-                     className={row.forecast ? 'bg-fg-dim/10 -mx-2 px-2 py-1.5 rounded-md' : ''}>
-                  <div className="flex items-center justify-between text-xs mb-1">
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-2 h-2 rounded-full" style={{ background: row.color }} />
-                      <span className="text-fg-dim">{row.label}</span>
+            {(() => {
+              // Resolve the per-segment count once. With a parent filter
+              // active, sum across the selected parents' slots.
+              const segCount = (k: 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots') => {
+                if (selectedParents === null) return data.active_loan_counts?.[k] ?? 0
+                let sum = 0
+                for (const pid of selectedParents) {
+                  sum += data.active_loan_counts_by_parent?.[pid]?.[k] ?? 0
+                }
+                return sum
+              }
+
+              const dollarRows = [
+                { label: 'SFR',            value: current.active_sfr,           color: '#58A6FF' },
+                { label: 'MFR',            value: current.active_mfr,           color: '#D4A853' },
+                { label: 'A&D',            value: current.active_and,           color: '#3FB950' },
+                { label: 'Raw Land',       value: current.active_raw_land,      color: '#8B949E' },
+                { label: 'Finished Lots',  value: current.active_finished_lots, color: '#A371F7' },
+                { label: 'HHH/JV',         value: current.hhh,            color: '#F85149' },
+                { label: 'Land Bucket',    value: current.land_bucket,    color: '#79C0FF' },
+                { label: 'Forecasted SFR', value: current.forecasted_sfr, color: '#8B949E', forecast: true },
+                { label: 'Forecasted MFR', value: current.forecasted_mfr, color: '#8B949E', forecast: true },
+                { label: 'Forecasted A&D', value: current.forecasted_and + current.a_and_d_planned, color: '#8B949E', forecast: true },
+              ]
+
+              const countRows = [
+                { label: 'SFR',           value: segCount('sfr'),           color: '#58A6FF' },
+                { label: 'MFR',           value: segCount('mfr'),           color: '#D4A853' },
+                { label: 'A&D',           value: segCount('and'),           color: '#3FB950' },
+                { label: 'Raw Land',      value: segCount('raw_land'),      color: '#8B949E' },
+                { label: 'Finished Lots', value: segCount('finished_lots'), color: '#A371F7' },
+              ]
+
+              const rows = breakdownMode === 'dollar' ? dollarRows : countRows
+              const denom = breakdownMode === 'dollar'
+                ? current.total_all
+                : rows.reduce((s, r) => s + r.value, 0)
+
+              return rows
+                .filter(r => r.value > 0)
+                .map(row => {
+                  const pct = denom > 0 ? row.value / denom : 0
+                  const fcst = 'forecast' in row && row.forecast
+                  return (
+                    <div key={row.label}
+                         className={fcst ? 'bg-fg-dim/10 -mx-2 px-2 py-1.5 rounded-md' : ''}>
+                      <div className="flex items-center justify-between text-xs mb-1">
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-2 h-2 rounded-full" style={{ background: row.color }} />
+                          <span className="text-fg-dim">{row.label}</span>
+                        </div>
+                        <span className="font-mono text-fg">
+                          {breakdownMode === 'dollar'
+                            ? formatCurrency(row.value, true)
+                            : `${row.value}`}
+                        </span>
+                      </div>
+                      <div className="h-1 bg-border rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all duration-500"
+                             style={{ width: `${pct * 100}%`, background: row.color }} />
+                      </div>
                     </div>
-                    <span className="font-mono text-fg">{formatCurrency(row.value, true)}</span>
-                  </div>
-                  <div className="h-1 bg-border rounded-full overflow-hidden">
-                    <div className="h-full rounded-full transition-all duration-500"
-                         style={{ width: `${pct * 100}%`, background: row.color }} />
-                  </div>
-                </div>
-              )
-            })}
+                  )
+                })
+            })()}
           </div>
         </div>
       </div>

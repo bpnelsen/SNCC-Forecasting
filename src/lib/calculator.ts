@@ -1160,6 +1160,26 @@ export function runForecast(input: ForecastInput): ForecastResult {
     imported_a_and_d_schedules: importedAAndDSchedules,
     parent_companies: input.parentCompanies.map(p => ({ id: p.id, name: p.name })),
     parent_loan_counts: Object.fromEntries(loanCountByParent),
+    // Active loan counts per segment for the Current Breakdown $/#
+    // toggle. OTC folds into SFR everywhere else, do the same here.
+    active_loan_counts: {
+      sfr:           sfrLoans.length,
+      mfr:           loansByType.MFR.length,
+      and:           loansByType['A&D'].length,
+      raw_land:      loansByType.RAW_LAND.length,
+      finished_lots: loansByType.FINISHED_LOTS.length,
+    },
+    // Per-parent counts. loansByParent already buckets by segment via
+    // loanTypeToSegment (OTC → 'sfr' included), so we just take .length.
+    active_loan_counts_by_parent: Object.fromEntries(
+      Array.from(loansByParent.entries()).map(([pid, segs]) => [pid, {
+        sfr:           segs.sfr.length,
+        mfr:           segs.mfr.length,
+        and:           segs.and.length,
+        raw_land:      segs.raw_land.length,
+        finished_lots: segs.finished_lots.length,
+      }]),
+    ),
     new_origination_projects: newOriginationProjects,
     reconciliation: {
       month_zero_fraction: m0Frac,

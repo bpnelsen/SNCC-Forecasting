@@ -1,11 +1,13 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
+import { useEffect, useState } from 'react'
 import {
-  LayoutDashboard, TrendingUp, Settings2, Upload, History, Building2, Landmark, ClipboardList, CreditCard, Handshake, HardHat, ClipboardCheck,
+  LayoutDashboard, TrendingUp, Settings2, Upload, History, Building2, Landmark, ClipboardList, CreditCard, Handshake, HardHat, ClipboardCheck, LogOut,
 } from 'lucide-react'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
+import { createSupabaseBrowserClient } from '@/lib/supabase-browser'
 
 const nav = [
   { href: '/dashboard',    label: 'Dashboard',       icon: LayoutDashboard },
@@ -22,7 +24,29 @@ const nav = [
 ]
 
 export function Navigation() {
-  const path = usePathname()
+  const path   = usePathname()
+  const router = useRouter()
+  // Auth pages render full-bleed without the sidebar.
+  const isAuthPage = path === '/login' || path === '/signup'
+
+  // Resolve the signed-in user's email for the footer. Client-side fetch
+  // so the layout stays a server component (and avoids leaking session
+  // details into the server render of the marketing/auth shell).
+  const [userEmail, setUserEmail] = useState<string | null>(null)
+  useEffect(() => {
+    if (isAuthPage) return
+    const supabase = createSupabaseBrowserClient()
+    supabase.auth.getUser().then(({ data }) => setUserEmail(data.user?.email ?? null))
+  }, [isAuthPage])
+
+  const signOut = async () => {
+    const supabase = createSupabaseBrowserClient()
+    await supabase.auth.signOut()
+    router.push('/login')
+    router.refresh()
+  }
+
+  if (isAuthPage) return null
   return (
     <nav className="w-52 shrink-0 flex flex-col bg-surface border-r border-border py-5">
       {/* Logo */}
@@ -64,6 +88,20 @@ export function Navigation() {
       {/* Footer */}
       <div className="px-5 pt-4 border-t border-border space-y-2">
         <ThemeToggle />
+        {userEmail && (
+          <div className="space-y-1">
+            <div className="text-[10px] text-fg-dim truncate" title={userEmail}>
+              {userEmail}
+            </div>
+            <button
+              onClick={signOut}
+              className="text-[10px] text-fg-dim hover:text-fg inline-flex items-center gap-1"
+            >
+              <LogOut className="w-3 h-3" />
+              Sign out
+            </button>
+          </div>
+        )}
         <div>
           <div className="text-[10px] text-fg-dim">Security National</div>
           <div className="text-[10px] text-border-strong">Financial Corporation</div>

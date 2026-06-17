@@ -65,7 +65,7 @@ export default function AskPage() {
             Ask
           </h1>
           <p className="text-[10px] text-fg-dim mt-0.5">
-            Conversational analytics over your portfolio data · Gemini 2.0 Flash
+            Conversational analytics over your portfolio data · Gemini 3 Flash
           </p>
         </div>
         {messages.length > 0 && (

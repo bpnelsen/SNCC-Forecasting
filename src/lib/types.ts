@@ -110,6 +110,11 @@ export interface MonthlyBalance {
   active_and: number
   active_raw_land: number
   active_finished_lots: number
+  // Sum of the planned A&D loans' contribution (initial_balance → draw →
+  // release lifecycle) at this month, across every loan on /a-and-d. Not
+  // included in active_<seg> or forecasted_<seg> — surfaced separately so
+  // the Dashboard can show "Forecasted A&D" = forecasted_and + this.
+  a_and_d_planned: number
   variance: number
   new_originations_sfr: number
   new_originations_mfr: number

@@ -1013,6 +1013,9 @@ export function runForecast(input: ForecastInput): ForecastResult {
       active_and,
       active_raw_land,
       active_finished_lots,
+      // Planned A&D contribution at this month — exposed separately so the
+      // dashboard can surface "Forecasted A&D" = forecasted_and + this.
+      a_and_d_planned: aAndDPlanned,
       variance,
       new_originations_sfr: newBySegmentScheduled.sfr,
       new_originations_mfr: newBySegmentScheduled.mfr,

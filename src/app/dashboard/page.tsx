@@ -59,9 +59,10 @@ function sliceSegment(
   m: MonthlyBalance,
   seg: SegKey,
   selectedParents: Set<string> | null,
-): { existing: number; forecasted: number; outstanding: number; active: number } {
+): { existing: number; forecasted: number; outstanding: number; active: number; a_and_d_planned: number } {
   // hhh has no engine-exposed active_<seg> (no imported HHH loans post
   // migration 017); active stays 0 for the hhh slot.
+  // a_and_d_planned is only meaningful on seg === 'and' — 0 elsewhere.
   if (selectedParents === null) {
     const fcst = m[`forecasted_${seg}` as const]
     const active = seg === 'hhh' ? 0 : m[`active_${seg}` as const]
@@ -70,9 +71,10 @@ function sliceSegment(
       forecasted:  fcst,
       outstanding: m[`outstanding_${seg}` as const],
       active,
+      a_and_d_planned: seg === 'and' ? m.a_and_d_planned : 0,
     }
   }
-  let existing = 0, forecasted = 0, outstanding = 0, active = 0
+  let existing = 0, forecasted = 0, outstanding = 0, active = 0, a_and_d_planned = 0
   for (const pid of selectedParents) {
     const slot = m.by_parent[pid]
     if (!slot) continue
@@ -80,14 +82,16 @@ function sliceSegment(
     forecasted  += slot[`forecasted_${seg}` as const]
     outstanding += slot[`outstanding_${seg}` as const]
     if (seg !== 'hhh') active += slot[`active_${seg}` as const]
-    // hhh segment also carries HHH/JV project balances; and segment carries
-    // forward-planned A&D loan balances. The engine adds these into m.<seg>
-    // and m.outstanding_<seg> globally — the per-parent slice has to do
-    // the same so totals are consistent across filter states.
+    // hhh segment also carries HHH/JV project balances; the engine adds these
+    // into m.<seg> and m.outstanding_<seg> globally — the per-parent slice
+    // has to do the same so totals are consistent across filter states.
     if (seg === 'hhh') forecasted += slot.hhh_jv_balance
-    if (seg === 'and') forecasted += slot.a_and_d_planned
+    // a_and_d_planned is returned as its own slot now (no longer folded into
+    // `forecasted`) so the Monthly Summary's Forecasted A&D row can show
+    // (scheduled A&D cohorts) + (planned A&D) cleanly without double-count.
+    if (seg === 'and') a_and_d_planned += slot.a_and_d_planned
   }
-  return { existing, forecasted, outstanding, active }
+  return { existing, forecasted, outstanding, active, a_and_d_planned }
 }
 
 // Land Bucket honors the same parent selection now that builders carry a
@@ -112,9 +116,13 @@ function applyFilter(
   let prev = 0
   return months.map((m, i) => {
     const slice = (seg: SegKey, chip: FilterKey) => {
-      if (!active.has(chip)) return { combined: 0, fcst: 0, outstanding: 0, active: 0 }
-      const { existing, forecasted, outstanding, active: act } = sliceSegment(m, seg, selectedParents)
-      return { combined: existing + forecasted, fcst: forecasted, outstanding, active: act }
+      if (!active.has(chip)) return { combined: 0, fcst: 0, outstanding: 0, active: 0, a_and_d_planned: 0 }
+      const { existing, forecasted, outstanding, active: act, a_and_d_planned } = sliceSegment(m, seg, selectedParents)
+      // combined still includes planned A&D so the segment total stays
+      // consistent with the engine's m.and (which folds in aAndDPlanned).
+      // forecasted_and stays scheduled-only — Forecasted A&D row on the
+      // Monthly Summary adds the two cleanly.
+      return { combined: existing + forecasted + a_and_d_planned, fcst: forecasted, outstanding, active: act, a_and_d_planned }
     }
 
     const sSfr = slice('sfr',           'sfr')
@@ -147,6 +155,9 @@ function applyFilter(
       active_and:           sAnd.active,
       active_raw_land:      sRaw.active,
       active_finished_lots: sFin.active,
+      // Propagate the per-parent planned A&D contribution onto the filtered
+      // MonthlyBalance so the Forecasted A&D row reads it directly.
+      a_and_d_planned:      sAnd.a_and_d_planned,
       total_loans: 0,
       total_all:   0,
       variance:    0,
@@ -339,6 +350,7 @@ export default function DashboardPage() {
               { label: 'Land Bucket',    value: current.land_bucket,    color: '#79C0FF' },
               { label: 'Forecasted SFR', value: current.forecasted_sfr, color: '#8B949E', forecast: true },
               { label: 'Forecasted MFR', value: current.forecasted_mfr, color: '#8B949E', forecast: true },
+              { label: 'Forecasted A&D', value: current.forecasted_and + current.a_and_d_planned, color: '#8B949E', forecast: true },
             ].filter(r => r.value > 0).map(row => {
               const pct = current.total_all > 0 ? row.value / current.total_all : 0
               return (
@@ -408,17 +420,18 @@ interface ReconciliationPanelProps {
 function ReconciliationPanel({ months, outstandingTile, reconciliation }: ReconciliationPanelProps) {
   if (months.length === 0) return null
   const m0 = months[0]
+  const fcstAnd0 = m0.forecasted_and + m0.a_and_d_planned
   const loansSum =
     m0.active_sfr + m0.active_mfr + m0.active_and +
     m0.active_raw_land + m0.active_finished_lots +
-    m0.forecasted_sfr + m0.forecasted_mfr
+    m0.forecasted_sfr + m0.forecasted_mfr + fcstAnd0
   const allSum = loansSum + m0.hhh + m0.land_bucket
 
   // Active Loan (Outstanding) tile vs Σ active_<seg> at month 0. Differences
   // are explained by matured loans (still in tile, dropped from active),
   // FL basis delta (active uses max basis, tile uses disbursed), and the
-  // forecasted SFR/MFR cohort balance (in loansSum, not in tile).
-  const activeOnly = loansSum - m0.forecasted_sfr - m0.forecasted_mfr
+  // forecasted SFR/MFR/A&D cohort balance (in loansSum, not in tile).
+  const activeOnly = loansSum - m0.forecasted_sfr - m0.forecasted_mfr - fcstAnd0
   const tileVsActive = outstandingTile - activeOnly
   const expectedDelta = reconciliation.matured_disbursed - reconciliation.fl_basis_delta
   const unexplained = tileVsActive - expectedDelta
@@ -432,7 +445,7 @@ function ReconciliationPanel({ months, outstandingTile, reconciliation }: Reconc
       ok: true,
       lhs: loansSum,
       rhs: loansSum,
-      note: 'Active SFR + MFR + A&D + Raw Land + Fin Lots + Forecasted SFR + Forecasted MFR',
+      note: 'Active SFR + MFR + A&D + Raw Land + Fin Lots + Forecasted SFR + MFR + A&D',
     },
     {
       name: 'Total Outstanding (All) ≡ Loans + HHH/JV + Land Bucket',
@@ -501,12 +514,14 @@ function SummaryTable({ months }: { months: MonthlyBalance[] }) {
   // Per-segment rows: active = imported loan drawn balance only (no cohorts).
   // Forecasted rows: scheduled new-origination cohort drawn balance.
   // Total Outstanding (Loans) = sum of every loan row above (active + the
-  // two Forecasted rows). LB-driven verticals and HHH/JV are deliberately
+  // three Forecasted rows). LB-driven verticals and HHH/JV are deliberately
   // excluded — LB is its own row, HHH/JV is sourced from the manual tab.
+  // Forecasted A&D = scheduled A&D cohorts + planned A&D loans (/a-and-d tab).
+  const fcstAnd = (m: MonthlyBalance) => m.forecasted_and + m.a_and_d_planned
   const outLoans = (m: MonthlyBalance) =>
     m.active_sfr + m.active_mfr + m.active_and +
     m.active_raw_land + m.active_finished_lots +
-    m.forecasted_sfr + m.forecasted_mfr
+    m.forecasted_sfr + m.forecasted_mfr + fcstAnd(m)
 
   const rows: SummaryRow[] = [
     { label: 'SFR',             values: months.map(m => m.active_sfr),             kind: 'currency' },
@@ -516,6 +531,10 @@ function SummaryTable({ months }: { months: MonthlyBalance[] }) {
     { label: 'Fin. Lots',       values: months.map(m => m.active_finished_lots),   kind: 'currency' },
     { label: 'Forecasted SFR',  values: months.map(m => m.forecasted_sfr),         kind: 'currency', emphasis: 'forecast' },
     { label: 'Forecasted MFR',  values: months.map(m => m.forecasted_mfr),         kind: 'currency', emphasis: 'forecast' },
+    // Forecasted A&D = scheduled A&D cohorts (drawn) + planned A&D loans'
+    // contribution from /a-and-d this month. No Truth-4 month-0 proration
+    // (that rule is SFR/MFR only).
+    { label: 'Forecasted A&D',  values: months.map(fcstAnd),                       kind: 'currency', emphasis: 'forecast' },
     // HHH/JV is an equity investment, not a loan. Sourced from the manual
     // /hhh-jv tab. Excluded from Total Outstanding (Loans); included in
     // Total Outstanding (All) and Total (All).

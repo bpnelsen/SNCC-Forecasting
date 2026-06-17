@@ -213,13 +213,14 @@ export default function DashboardPage() {
   const parentsFiltered = selectedParents !== null
   const filtered = chipsFiltered || parentsFiltered
 
-  // Active Loan (Outstanding) tile: disbursed balance across actual loans
-  // only. Land Bucket and HHH/JV aren't loans (LB = inventory, HHH/JV =
-  // joint-venture project balances) so they're excluded. Product-type
-  // chips don't gate this tile — "for all loans regardless of loan types"
-  // — but the parent-company multi-select still applies.
+  // Active Loan (Outstanding) tile: disbursed balance across actual loans.
+  // Land Bucket and HHH/JV aren't loans (LB = inventory, HHH/JV = joint-
+  // venture project balances) so they're excluded categorically. Product-
+  // type chips DO gate this tile — toggling SFR off drops SFR's disbursed
+  // balance — and the parent multi-select still applies on top.
   const LOAN_SEGMENT_KEYS = ['sfr', 'mfr', 'and', 'raw_land', 'finished_lots'] as const
   const outstanding = LOAN_SEGMENT_KEYS.reduce((s, k) => {
+    if (!active.has(k)) return s
     if (selectedParents === null) return s + data.active_loans_outstanding[k]
     const monthOne = data.months[0]
     let v = 0
@@ -311,7 +312,7 @@ export default function DashboardPage() {
           subLabel={`${totalActiveLoans} loans${parentsFiltered ? ' · parent-filtered' : ''}`} />
         <StatCard label="Active Loan (Outstanding)"
           value={formatCurrency(outstanding, true)}
-          subLabel={parentsFiltered ? 'disbursed · parent-filtered' : 'disbursed to date'} />
+          subLabel={filtered ? 'disbursed · filtered' : 'disbursed to date'} />
         <StatCard label="Land Bucket" value={formatCurrency(current.land_bucket, true)}
           delta={formatVariance(current.land_bucket - (months[1]?.land_bucket || 0))} />
         <StatCard label="Monthly Income" value={formatCurrency(current.total_income, true)}

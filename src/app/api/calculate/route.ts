@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { apiError } from '@/lib/api-errors'
 import { createServiceClient } from '@/lib/supabase'
 import { runForecast } from '@/lib/calculator'
 import {
@@ -142,6 +143,6 @@ export async function GET() {
     return NextResponse.json(result)
   } catch (e) {
     console.error('/api/calculate error:', e)
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return apiError(e)
   }
 }

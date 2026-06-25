@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { apiError } from '@/lib/api-errors'
 import { createServiceClient } from '@/lib/supabase'
 
 // POST (not PUT) updates an existing project — some hosts reject PUT with 405.
@@ -34,7 +35,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (error) throw error
     return NextResponse.json({ ok: true })
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return apiError(e)
   }
 }
 
@@ -45,6 +46,6 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
     if (error) throw error
     return NextResponse.json({ ok: true })
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return apiError(e)
   }
 }

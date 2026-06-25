@@ -1,19 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { apiError } from '@/lib/api-errors'
 import { createServiceClient } from '@/lib/supabase'
 
 // Supabase / PostgREST errors are plain objects; String(e) collapses them to
 // "[object Object]". Pull out the most useful fields.
-function errMessage(e: unknown): string {
-  if (e instanceof Error) return e.message
-  if (e && typeof e === 'object') {
-    const o = e as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown }
-    const parts = [o.message, o.details, o.hint, o.code].filter(Boolean).map(String)
-    if (parts.length) return parts.join(' · ')
-    try { return JSON.stringify(e) } catch { /* fall through */ }
-  }
-  return String(e)
-}
-
 // POST = update by id (PUT-405-safe). Used to set parent_company_id on a
 // builder; also handles renames + default rate / program edits.
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -49,7 +39,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (error) throw error
     return NextResponse.json(data)
   } catch (e) {
-    return NextResponse.json({ error: errMessage(e) }, { status: 500 })
+    return apiError(e)
   }
 }
 
@@ -60,6 +50,6 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
     if (error) throw error
     return NextResponse.json({ ok: true })
   } catch (e) {
-    return NextResponse.json({ error: errMessage(e) }, { status: 500 })
+    return apiError(e)
   }
 }

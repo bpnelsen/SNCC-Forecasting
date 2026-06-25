@@ -1,18 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { apiError } from '@/lib/api-errors'
 import { createServiceClient } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
-
-function errMessage(e: unknown): string {
-  if (e instanceof Error) return e.message
-  if (e && typeof e === 'object') {
-    const o = e as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown }
-    const parts = [o.message, o.details, o.hint, o.code].filter(Boolean).map(String)
-    if (parts.length) return parts.join(' · ')
-    try { return JSON.stringify(e) } catch { /* fall through */ }
-  }
-  return String(e)
-}
 
 export async function GET() {
   try {
@@ -21,7 +11,7 @@ export async function GET() {
     if (error) throw error
     return NextResponse.json(data ?? [])
   } catch (e) {
-    return NextResponse.json({ error: errMessage(e) }, { status: 500 })
+    return apiError(e)
   }
 }
 
@@ -48,6 +38,6 @@ export async function POST(req: NextRequest) {
     if (error) throw error
     return NextResponse.json(data)
   } catch (e) {
-    return NextResponse.json({ error: errMessage(e) }, { status: 500 })
+    return apiError(e)
   }
 }

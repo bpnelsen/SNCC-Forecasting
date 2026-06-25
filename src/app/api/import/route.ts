@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { apiError } from '@/lib/api-errors'
 import { createServiceClient } from '@/lib/supabase'
 import { parseCurrentReportWithDiagnostics } from '@/lib/parser'
 
@@ -10,6 +11,15 @@ export async function POST(req: NextRequest) {
     const notes = (fd.get('notes') as string) || null
 
     if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+
+    // Reject anything that isn't a reasonably-sized .xlsx before reading it.
+    const MAX_BYTES = 15 * 1024 * 1024 // 15 MB
+    if (!file.name.toLowerCase().endsWith('.xlsx')) {
+      return NextResponse.json({ error: 'Only .xlsx files are accepted.' }, { status: 400 })
+    }
+    if (file.size > MAX_BYTES) {
+      return NextResponse.json({ error: 'File exceeds the 15 MB limit.' }, { status: 400 })
+    }
 
     const buffer = Buffer.from(await file.arrayBuffer())
     const { loans, diagnostics } = parseCurrentReportWithDiagnostics(buffer)
@@ -66,6 +76,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ version_id: version.id, loan_count: loans.length, label })
   } catch (e) {
     console.error('/api/import error:', e)
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return apiError(e)
   }
 }

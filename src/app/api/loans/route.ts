@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { apiError } from '@/lib/api-errors'
 import { createServiceClient } from '@/lib/supabase'
 
 // Next 14 statically caches GET route handlers by default. Force-dynamic so
@@ -49,6 +50,6 @@ export async function GET() {
       horizonMonths: settings?.horizon_months ?? 17,
     })
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return apiError(e)
   }
 }

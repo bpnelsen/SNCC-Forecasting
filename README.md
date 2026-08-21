@@ -17,7 +17,7 @@ Construction lending portfolio intelligence dashboard for Security National Fina
 
 | Layer    | Tool                           |
 |----------|--------------------------------|
-| Frontend | Next.js 14 (App Router)        |
+| Frontend | Next.js 15 (App Router), React 19 |
 | Database | Supabase (PostgreSQL)          |
 | Auth     | Supabase Auth (email/password) |
 | Hosting  | Vercel                         |
@@ -157,10 +157,13 @@ That host was unreachable from the environment this was set up in, so it's left
 as a manual step. Uploads are gated behind authentication and capped at 4 MB,
 which is the main practical mitigation meanwhile.
 
-**Remaining `npm audit` "high" findings against `next`** are DoS /
-image-optimizer issues needing a Next 15+ major upgrade. The critical
-middleware authorization-bypass advisory (CVE-2025-29927) **is** fixed at
-`14.2.35`, which is what's pinned.
+**Remaining `npm audit` "high" findings** are `next`, `postcss` and `sharp`.
+All three are *transitive* — `npm audit` attributes them to `next` because Next
+bundles `postcss` and pulls `sharp` in for image optimization; none are in
+Next's own code, and the only listed fix is `next@16` (a major upgrade that also
+removes `next lint`). This app renders no `next/image`, so sharp's image path is
+never exercised. The critical middleware authorization-bypass advisory
+(CVE-2025-29927) was fixed back in `14.2.25` and does not apply to 15.x.
 
 ---
 
@@ -276,6 +279,26 @@ Regression tests for all of the above are in `src/lib/calculator.test.ts`.
 
 ---
 
+## Next 15 notes
+
+The app targets Next 15 / React 19. Things that differ from the Next 14 code:
+
+- **`cookies()` is async.** `createSupabaseServerClient()` (`src/lib/supabase-server.ts`)
+  is therefore async too, and every caller must `await` it.
+- **Dynamic route `params` is a Promise.** All ten `[id]` route handlers take
+  `{ params }: { params: Promise<{ id: string }> }` and resolve it with
+  `const { id } = await params` immediately after the auth guard.
+  `src/app/api/builders/[id]/route.test.ts` pins that contract — it fails if the
+  Promise is passed through unresolved.
+- **GET route handlers are no longer cached by default.** The
+  `export const dynamic = 'force-dynamic'` lines are now redundant but kept
+  deliberately, so a future default change can't silently start serving
+  build-time snapshots of the loan data.
+- **`serverComponentsExternalPackages` moved out of `experimental`** and is now
+  `serverExternalPackages` in `next.config.js`.
+
+---
+
 ## Project structure
 
 ```
@@ -310,10 +333,16 @@ supabase/migrations/            # 001–020, apply all in order
 ```bash
 npm run dev          # dev server
 npm run typecheck    # tsc --noEmit
-npm run lint         # next lint
+npm run lint         # eslint src --ext .ts,.tsx
 npm run test         # vitest run
 npm run verify       # all three
 ```
+
+Requires **Node 18.18+** (a Next 15 floor); CI and Vercel both run Node 20.
+
+`lint` calls the ESLint CLI directly rather than `next lint`, which Next 15
+deprecates and Next 16 removes. The config stays in `.eslintrc.json` (eslintrc
+format, ESLint 8) — moving to ESLint 9 flat config is a separate step.
 
 CI runs typecheck, lint, tests and a build, plus applies every migration twice
 against a clean Postgres 16 and asserts RLS is on for every table.

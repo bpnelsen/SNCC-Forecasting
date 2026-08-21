@@ -5,8 +5,9 @@ import { requireUser } from '@/lib/auth'
 import { fetchAll } from '@/lib/fetch-all'
 import type { Loan } from '@/lib/types'
 
-// Next 14 statically caches GET route handlers by default. Force-dynamic so
-// DB writes are reflected immediately on Vercel without a redeploy.
+// Kept explicit: Next 15 no longer caches GET route handlers by default, but
+// stating it means a future default change can't silently start serving a
+// build-time snapshot instead of current DB state.
 export const dynamic = 'force-dynamic'
 
 export async function GET() {

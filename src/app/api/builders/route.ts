@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import { requireUser } from '@/lib/auth'
 
-// Next 14 statically caches GET route handlers by default. Force-dynamic so
-// DB writes are reflected immediately on Vercel without a redeploy.
+// Kept explicit: Next 15 no longer caches GET route handlers by default, but
+// stating it means a future default change can't silently start serving a
+// build-time snapshot instead of current DB state.
 export const dynamic = 'force-dynamic'
 
 export async function GET() {

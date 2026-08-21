@@ -38,9 +38,10 @@ function buildPayload(body: Record<string, unknown>): Record<string, unknown> {
 }
 
 // POST = update by id (PUT-405-safe — Vercel rejects PUT on some setups).
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = await requireUser()
   if (denied) return denied
+  const { id } = await params
 
   try {
     const body = await req.json()
@@ -48,7 +49,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const { data, error } = await sb
       .from('land_bucket_projects')
       .update(buildPayload(body))
-      .eq('id', params.id)
+      .eq('id', id)
       .select()
       .single()
     if (error) throw error
@@ -59,9 +60,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 }
 
 // PUT kept for backwards compatibility but not relied on; the page now POSTs.
-export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = await requireUser()
   if (denied) return denied
+  const { id } = await params
 
   try {
     const body = await req.json()
@@ -69,7 +71,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     const { data, error } = await sb
       .from('land_bucket_projects')
       .update(buildPayload(body))
-      .eq('id', params.id)
+      .eq('id', id)
       .select()
       .single()
     if (error) throw error
@@ -79,13 +81,14 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = await requireUser()
   if (denied) return denied
+  const { id } = await params
 
   try {
     const sb = createServiceClient()
-    const { error } = await sb.from('land_bucket_projects').delete().eq('id', params.id)
+    const { error } = await sb.from('land_bucket_projects').delete().eq('id', id)
     if (error) throw error
     return NextResponse.json({ ok: true })
   } catch (e) {

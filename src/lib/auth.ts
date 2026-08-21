@@ -39,7 +39,7 @@ export async function requireUser(): Promise<NextResponse | null> {
  */
 export async function getUser(): Promise<{ user: User | null }> {
   try {
-    const sb = createSupabaseServerClient()
+    const sb = await createSupabaseServerClient()
     const { data, error } = await sb.auth.getUser()
     if (error) return { user: null }
     return { user: data.user ?? null }

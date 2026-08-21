@@ -15,16 +15,17 @@ function errMessage(e: unknown): string {
 
 // DELETE clears the explicit override for a given borrower. URL segment is
 // URL-encoded; we just decode it before the WHERE clause.
-export async function DELETE(_req: NextRequest, { params }: { params: { borrower: string } }) {
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ borrower: string }> }) {
   const denied = await requireUser()
   if (denied) return denied
+  const { borrower } = await params
 
   try {
     const sb = createServiceClient()
     const { error } = await sb
       .from('borrower_parent_mapping')
       .delete()
-      .eq('borrower', decodeURIComponent(params.borrower))
+      .eq('borrower', decodeURIComponent(borrower))
     if (error) throw error
     return NextResponse.json({ ok: true })
   } catch (e) {

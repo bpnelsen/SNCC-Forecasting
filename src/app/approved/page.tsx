@@ -438,7 +438,7 @@ export default function ApprovedLoansPage() {
         </div>
         <div>
           Setting <strong>Date Approved</strong> auto-fills <strong>LC Exp.</strong> to Date Approved + 90 days (still editable for extensions).
-          Setting <strong>Status</strong> to Closed (the only way a row closes) auto-fills <strong>Date Completed</strong> with today's date if blank, then removes the row from view —
+          Setting <strong>Status</strong> to Closed (the only way a row closes) auto-fills <strong>Date Completed</strong> with today&rsquo;s date if blank, then removes the row from view —
           toggle the Closed chip to bring it back.
         </div>
       </div>

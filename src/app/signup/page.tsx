@@ -30,14 +30,21 @@ function SignupForm() {
     if (loading) return
     setLoading(true); setError(null); setNeedsConfirm(false)
     try {
+      // Goes through our own route, not supabase.auth.signUp directly, so the
+      // email-domain allowlist is enforced server-side where it can't be
+      // bypassed by editing the request in devtools.
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      })
+      const body = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(body?.error || `Sign-up failed (${res.status})`)
+
+      // The account is created already confirmed, so sign straight in.
       const supabase = createSupabaseBrowserClient()
-      const { data, error } = await supabase.auth.signUp({ email, password })
-      if (error) throw error
-      // If email confirmation is disabled in the Supabase project (per the
-      // requested setup), signUp returns a session immediately. If it's
-      // still on, data.session will be null and the user has to confirm
-      // before they can sign in — flag it so they know what happened.
-      if (!data.session) {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) {
         setNeedsConfirm(true)
         return
       }

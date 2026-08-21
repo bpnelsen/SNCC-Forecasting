@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
+import { requireUser } from '@/lib/auth'
 
 // POST (not PUT) updates an existing project — some hosts reject PUT with 405.
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const body = await req.json()
     const sb   = createServiceClient()
@@ -39,6 +43,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const sb = createServiceClient()
     const { error } = await sb.from('hhh_jv_projects').delete().eq('id', params.id)

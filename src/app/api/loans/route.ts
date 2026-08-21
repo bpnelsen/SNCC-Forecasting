@@ -1,12 +1,18 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import { UNASSIGNED_PARENT_KEY } from '@/lib/calculator'
+import { requireUser } from '@/lib/auth'
+import { fetchAll } from '@/lib/fetch-all'
+import type { Loan } from '@/lib/types'
 
 // Next 14 statically caches GET route handlers by default. Force-dynamic so
 // DB writes are reflected immediately on Vercel without a redeploy.
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const sb = createServiceClient()
 
@@ -44,7 +50,7 @@ export async function GET() {
       { data: patterns },
       { data: mappings },
     ] = await Promise.all([
-      sb.from('loans').select('*').eq('version_id', version.id),
+      fetchAll<Loan>(sb.from('loans').select('*').eq('version_id', version.id)),
       sb.from('parent_companies').select('id, name'),
       sb.from('parent_company_patterns').select('parent_company_id, pattern'),
       sb.from('borrower_parent_mapping').select('borrower, parent_company_id'),

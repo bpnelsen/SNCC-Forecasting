@@ -102,9 +102,22 @@ export interface ParseDiagnostics {
   sample_first_data_row: unknown[] | null
 }
 
+/**
+ * Default active-draw percentage, used only when the caller doesn't supply one.
+ * The real value lives in assumptions.draw_pct_active and is passed in by
+ * /api/import — this constant is the fallback for when that row is missing.
+ */
+export const DEFAULT_DRAW_PCT_ACTIVE = 0.92
+
 export function parseCurrentReportWithDiagnostics(
   buffer: Buffer,
+  drawPctActive: number = DEFAULT_DRAW_PCT_ACTIVE,
 ): { loans: Loan[]; diagnostics: ParseDiagnostics } {
+  // Guard against a nonsense assumption (0, negative, NaN) silently zeroing
+  // every projected balance across the whole portfolio.
+  const drawPct = Number.isFinite(drawPctActive) && drawPctActive > 0
+    ? drawPctActive
+    : DEFAULT_DRAW_PCT_ACTIVE
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: false })
 
   const diagnostics: ParseDiagnostics = {
@@ -145,9 +158,18 @@ export function parseCurrentReportWithDiagnostics(
   diagnostics.header_row_preview = rawHeaderRow.map(h => String(h ?? ''))
 
   const idx = (keyword: string) => headers.findIndex(h => h.includes(keyword))
+  // Exact match first, falling back to substring. Needed for 'borrower': the
+  // canonical export also carries "Co-Borrower 1 Name" columns, and a bare
+  // substring search returns whichever appears first — which may not be the
+  // real Borrower column.
+  const idxExact = (name: string) => headers.findIndex(h => h === name)
+  const idxPreferExact = (name: string) => {
+    const exact = idxExact(name)
+    return exact !== -1 ? exact : idx(name)
+  }
 
   const col = {
-    borrower:          idx('borrower'),
+    borrower:          idxPreferExact('borrower'),
     loan_number:       idx('loan number') !== -1 ? idx('loan number') : idx('loan #'),
     loan_program:      idx('loan program') !== -1 ? idx('loan program') : idx('program'),
     original_amt:      idx('original loan amount') !== -1 ? idx('original loan amount') : idx('original'),
@@ -157,13 +179,13 @@ export function parseCurrentReportWithDiagnostics(
     disbursed:         idx('disbursed'),
     remaining:         idx('remaining'),
     interest_reserve:  idx('interest reserve'),
-    rate:              idx('interest rate') !== -1 ? idx('interest rate') : idx('rate'),
+    rate:              idx('interest rate') !== -1 ? idx('interest rate') : idxPreferExact('rate'),
     accrued:           idx('accrued'),
     project:           idx('collateral name') !== -1 ? idx('collateral name')
                        : idx('collateral') !== -1 ? idx('collateral')
                        : idx('project name') !== -1 ? idx('project name')
                        : idx('project'),
-    unit:              idx('unit'),
+    unit:              idxPreferExact('unit name') !== -1 ? idxPreferExact('unit name') : idx('unit'),
     development:       idx('development'),
     subdivision:       idx('subdivision'),
   }
@@ -187,8 +209,11 @@ export function parseCurrentReportWithDiagnostics(
     const disbursed  = toNum(col.disbursed >= 0 ? row[col.disbursed] : 0)
     const currentAmt = toNum(col.current_amt >= 0 ? row[col.current_amt] : 0)
 
-    // Col Q logic: MAX(disbursed, current_loan_amount * 0.92)
-    const projected = Math.max(disbursed, currentAmt * 0.92)
+    // Col Q logic: MAX(disbursed, current_loan_amount × draw_pct_active).
+    // The percentage comes from assumptions.draw_pct_active rather than being
+    // hardcoded, so editing it on the Assumptions tab actually takes effect on
+    // the next import.
+    const projected = Math.max(disbursed, currentAmt * drawPct)
 
     loans.push({
       borrower,
@@ -219,6 +244,9 @@ export function parseCurrentReportWithDiagnostics(
   return { loans, diagnostics }
 }
 
-export function parseCurrentReport(buffer: Buffer): Loan[] {
-  return parseCurrentReportWithDiagnostics(buffer).loans
+export function parseCurrentReport(
+  buffer: Buffer,
+  drawPctActive: number = DEFAULT_DRAW_PCT_ACTIVE,
+): Loan[] {
+  return parseCurrentReportWithDiagnostics(buffer, drawPctActive).loans
 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
+import { requireUser } from '@/lib/auth'
 
 // Next 14 statically caches GET route handlers by default. Force-dynamic so
 // DB writes are reflected immediately on Vercel without a redeploy.
@@ -20,6 +21,9 @@ function errMessage(e: unknown): string {
 }
 
 export async function GET() {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const sb = createServiceClient()
     const { data, error } = await sb
@@ -34,6 +38,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const body = await req.json()
     const sb   = createServiceClient()

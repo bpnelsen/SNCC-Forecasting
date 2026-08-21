@@ -755,7 +755,7 @@ function DrawCurveShortcut({
       {open && (
         <div className="p-4 space-y-4 border-t border-border">
           <p className="text-[10px] text-fg-dim">
-            Shortcut to the same loan-program rows you'd edit on Assumptions. Changes
+            Shortcut to the same loan-program rows you&rsquo;d edit on Assumptions. Changes
             apply to every New Originations entry assigned to that program.
           </p>
 

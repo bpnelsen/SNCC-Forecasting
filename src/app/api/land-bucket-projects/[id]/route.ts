@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
+import { requireUser } from '@/lib/auth'
 
 // Supabase / PostgREST errors are plain objects; String(e) collapses them to
 // "[object Object]". Pull out the useful fields.
@@ -38,6 +39,9 @@ function buildPayload(body: Record<string, unknown>): Record<string, unknown> {
 
 // POST = update by id (PUT-405-safe — Vercel rejects PUT on some setups).
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const body = await req.json()
     const sb   = createServiceClient()
@@ -56,6 +60,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
 // PUT kept for backwards compatibility but not relied on; the page now POSTs.
 export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const body = await req.json()
     const sb   = createServiceClient()
@@ -73,6 +80,9 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const sb = createServiceClient()
     const { error } = await sb.from('land_bucket_projects').delete().eq('id', params.id)

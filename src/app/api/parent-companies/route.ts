@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
+import { requireUser } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,6 +16,9 @@ function errMessage(e: unknown): string {
 }
 
 export async function GET() {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const sb = createServiceClient()
     const { data, error } = await sb.from('parent_companies').select('*').order('name')
@@ -27,6 +31,9 @@ export async function GET() {
 
 // POST creates a new parent company (POST, not PUT — host-friendly).
 export async function POST(req: NextRequest) {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const body = await req.json()
     if (!body.name || !String(body.name).trim()) {

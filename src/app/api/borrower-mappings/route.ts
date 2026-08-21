@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
+import { requireUser } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,6 +16,9 @@ function errMessage(e: unknown): string {
 }
 
 export async function GET() {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const sb = createServiceClient()
     const { data, error } = await sb.from('borrower_parent_mapping').select('*').order('borrower')
@@ -28,6 +32,9 @@ export async function GET() {
 // POST upserts a borrower → parent_company_id mapping (borrower is the PK,
 // so a repeated POST replaces the existing parent).
 export async function POST(req: NextRequest) {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const body = await req.json()
     if (!body.borrower || !String(body.borrower).trim()) {

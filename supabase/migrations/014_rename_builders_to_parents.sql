@@ -32,6 +32,22 @@ begin
     join builders other
       on other.name = pl.new_name
      and other.id  <> pl.builder_id
+
+    union all
+
+    -- Two or more builders sharing ONE parent both target the same new name.
+    -- Neither collides with an *existing* builder, so the check above misses
+    -- them and the UPDATE below used to fail with a raw unique-constraint
+    -- error instead of this message. builders.name is UNIQUE, so this case is
+    -- unsatisfiable by design — the user has to decide which builder keeps the
+    -- parent's name (or clear parent_company_id on the others) before re-running.
+    select 'multiple builders map to parent "' || pl.new_name || '": '
+           || string_agg(pl.old_name, ', ' order by pl.old_name)
+           || ' — builders.name is UNIQUE, so they cannot all take that name'
+           as conflict
+    from planned pl
+    group by pl.new_name
+    having count(*) > 1
   )
   select string_agg(conflict, '; ') into conflicts from collisions;
 

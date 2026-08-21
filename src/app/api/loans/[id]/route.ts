@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import { LoanType } from '@/lib/types'
+import { requireUser } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,6 +17,9 @@ export async function PATCH(
   req: Request,
   ctx: { params: { id: string } },
 ) {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const body = await req.json().catch(() => ({}))
     const patch: Record<string, number | string> = {}

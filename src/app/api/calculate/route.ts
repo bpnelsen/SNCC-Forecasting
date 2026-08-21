@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import { runForecast } from '@/lib/calculator'
+import { requireUser } from '@/lib/auth'
+import { fetchAll } from '@/lib/fetch-all'
 import {
   Loan,
   LoanProgram,
@@ -20,6 +22,9 @@ import {
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const sb = createServiceClient()
 
@@ -78,7 +83,7 @@ export async function GET() {
     }
 
     const [loansRes, buildersRes, programsRes, projectsRes, origsRes, hhhJvRes, aAndDRes, parentsRes, patternsRes, mappingsRes] = await Promise.all([
-      sb.from('loans').select('*').eq('version_id', version.id),
+      fetchAll<Loan>(sb.from('loans').select('*').eq('version_id', version.id)),
       sb.from('builders').select('*'),
       sb.from('loan_programs').select('*'),
       sb.from('land_bucket_projects').select('*'),

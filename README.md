@@ -43,7 +43,7 @@ Create a project at [supabase.com](https://supabase.com), pick a nearby region, 
 ### 3. Run the database migrations — **all of them, in order**
 
 In Supabase Dashboard → **SQL Editor**, run every file in `supabase/migrations/`
-in filename order (`001_…` through `020_…`).
+in filename order (`001_…` through `021_…`).
 
 Running only `001` is not enough — the app will not start. `002` creates
 `forecast_settings`, which `/api/calculate` requires, and later migrations add
@@ -69,6 +69,7 @@ true, and asserts RLS is enabled on every table.
 | `016` | `approved_loans` |
 | `017`–`019` | Reclassify existing loans by program |
 | `020` | **Enables RLS on every table** |
+| `021` | Drops the orphaned `scheduled_originations` table (guarded — refuses if it has rows) |
 
 ### 4. Lock down account creation
 

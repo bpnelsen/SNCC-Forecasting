@@ -183,6 +183,15 @@ export interface ForecastResult {
   as_of_date: string
   version_label: string
   total_active_loans: number
+  // Data-quality counters for the active version. Both conditions quietly
+  // distort the forecast, so the dashboard surfaces them rather than leaving
+  // them to be noticed as an unexplained number.
+  //   unclassified_loan_count: loan_type === 'UNKNOWN'. These roll into the
+  //     HHH/JV segment, so a renamed Loan Program in the export inflates HHH.
+  //   no_maturity_loan_count: no current_loan_due_date, so the engine never
+  //     pays the loan off and holds it flat across the whole horizon.
+  unclassified_loan_count: number
+  no_maturity_loan_count: number
   // Sum of loan_amount_disbursed (cash actually drawn/funded) across every
   // loan in the active version, broken out by product type so the dashboard
   // can respect the product-type filter. `total` = sum of all segments.

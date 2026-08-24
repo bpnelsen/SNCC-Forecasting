@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { TOOL_DECLARATIONS, TOOL_HANDLERS, SYSTEM_INSTRUCTION } from '@/lib/gemini-tools'
+import { requireUser } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -61,6 +62,9 @@ interface OpenRouterResponse {
 }
 
 export async function POST(req: NextRequest) {
+  const denied = await requireUser()
+  if (denied) return denied
+
   const apiKey = process.env.OPENROUTER_API_KEY
   if (!apiKey) {
     return NextResponse.json({

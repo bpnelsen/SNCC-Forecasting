@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import { runForecast } from '@/lib/calculator'
+import { requireUser } from '@/lib/auth'
+import { fetchAll } from '@/lib/fetch-all'
 import {
   Loan,
   LoanProgram,
@@ -15,11 +17,15 @@ import {
   BorrowerParentMapping,
 } from '@/lib/types'
 
-// Next 14 statically caches GET route handlers by default. Force-dynamic so
-// the forecast always reflects the current active version, originations, etc.
+// Kept explicit: Next 15 no longer caches GET route handlers by default, but
+// stating it means a future default change can't silently start serving a
+// build-time snapshot instead of current DB state.
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const sb = createServiceClient()
 
@@ -78,7 +84,7 @@ export async function GET() {
     }
 
     const [loansRes, buildersRes, programsRes, projectsRes, origsRes, hhhJvRes, aAndDRes, parentsRes, patternsRes, mappingsRes] = await Promise.all([
-      sb.from('loans').select('*').eq('version_id', version.id),
+      fetchAll<Loan>(sb.from('loans').select('*').eq('version_id', version.id)),
       sb.from('builders').select('*'),
       sb.from('loan_programs').select('*'),
       sb.from('land_bucket_projects').select('*'),

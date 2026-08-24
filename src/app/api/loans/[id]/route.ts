@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import { LoanType } from '@/lib/types'
+import { requireUser } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,8 +15,12 @@ const ALLOWED_LOAN_TYPES: LoanType[] = [
 // version is the source of truth for the rest of the loan record.
 export async function PATCH(
   req: Request,
-  ctx: { params: { id: string } },
+  ctx: { params: Promise<{ id: string }> },
 ) {
+  const denied = await requireUser()
+  if (denied) return denied
+  const { id } = await ctx.params
+
   try {
     const body = await req.json().catch(() => ({}))
     const patch: Record<string, number | string> = {}
@@ -51,7 +56,7 @@ export async function PATCH(
     const { data, error } = await sb
       .from('loans')
       .update(patch)
-      .eq('id', ctx.params.id)
+      .eq('id', id)
       .select()
       .single()
 

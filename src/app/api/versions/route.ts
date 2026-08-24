@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
+import { requireUser } from '@/lib/auth'
 
-// Opt out of Next 14's default static caching for GET route handlers — without
-// this, Vercel serves a build-time snapshot and DB writes (new imports, edits)
-// don't appear until the next deploy.
+// Kept explicit: Next 15 no longer caches GET route handlers by default, but
+// stating it means a future default change can't silently start serving a
+// build-time snapshot instead of current DB state.
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const sb = createServiceClient()
     const { data, error } = await sb
@@ -22,6 +26,9 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
+  const denied = await requireUser()
+  if (denied) return denied
+
   try {
     const { id } = await req.json()
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })

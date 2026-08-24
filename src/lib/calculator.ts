@@ -347,6 +347,50 @@ function projectAAndDLoan(
   let lotsReleased = 0
   let lotsAcc = 0
 
+  // A loan originated BEFORE the forecast window is already part-way through
+  // its lifecycle. Previously month 0 reset it to initial_balance with zero
+  // draws applied, so a facility that opened eight months ago re-ramped from
+  // scratch and its balance was understated for the whole horizon. Catch it up
+  // to where it should actually be as of the first forecast month.
+  const horizonStartKey = months[0]?.key
+  if (origKey && horizonStartKey && origKey < horizonStartKey) {
+    originated = true
+    balance = loan.initial_balance
+
+    const elapsed = monthKeysBetween(origKey, horizonStartKey)
+
+    // Replay the draw months that fell before the window.
+    const drawMonthsElapsed = releaseKey && releaseKey < horizonStartKey
+      ? Math.min(elapsed, monthKeysBetween(origKey, releaseKey))
+      : elapsed
+    drawMonthsApplied = Math.min(loan.draw_period_months, Math.max(0, drawMonthsElapsed))
+    for (let k = 0; k < drawMonthsApplied; k++) {
+      const key = addMonthKey(origKey, k)
+      const override = Number(loan.draw_schedule?.[key] ?? 0)
+      balance = Math.min(peak, balance + (override > 0 ? override : linearDraw))
+    }
+
+    // Replay the lot releases that fell before the window.
+    if (releaseKey && releaseKey < horizonStartKey) {
+      const releaseMonths = monthKeysBetween(releaseKey, horizonStartKey)
+      for (let k = 0; k < releaseMonths && lotsReleased < loan.total_lots; k++) {
+        const key = addMonthKey(releaseKey, k)
+        const override = loan.release_schedule?.[key]
+        let lots: number
+        if (override != null) {
+          lots = Math.max(0, Math.floor(Number(override) || 0))
+        } else {
+          lotsAcc += linearLotsPerMonth
+          lots = Math.floor(lotsAcc)
+          lotsAcc -= lots
+        }
+        lots = Math.min(lots, loan.total_lots - lotsReleased)
+        lotsReleased += lots
+        balance = Math.max(0, balance - lots * lotReleasePrice)
+      }
+    }
+  }
+
   for (let i = 0; i < months.length; i++) {
     const monthKey = months[i].key
 
@@ -474,6 +518,64 @@ function monthZeroFraction(asOfDate: string, monthZeroStart: Date): number {
   return Math.max(0, Math.min(1, (daysInMonth - dayOfMonth) / daysInMonth))
 }
 
+/**
+ * How many loans a recurring new-origination entry would already have started
+ * in the months between its own start month and `horizonStartKey` (exclusive).
+ *
+ * Used to fast-forward an entry whose series began before the forecast window,
+ * so its remaining lot pool is correct instead of the entry being dropped.
+ * Walks calendar months rather than the horizon array because those months sit
+ * outside it by definition.
+ */
+function countOriginationsBefore(entry: NewOriginationEntry, horizonStartKey: string): number {
+  if (!entry.month || entry.month >= horizonStartKey) return 0
+
+  const cap = entry.total_lots && entry.total_lots > 0 ? entry.total_lots : Infinity
+  const schedule = entry.monthly_mode === 'schedule' ? (entry.monthly_schedule ?? {}) : null
+  const fixedCount = Math.max(0, Math.floor(entry.loan_count))
+
+  // A fixed-rate series with no cap: just count the elapsed months.
+  if (!schedule && cap === Infinity) {
+    return monthKeysBetween(entry.month, horizonStartKey) * fixedCount
+  }
+
+  let total = 0
+  let key = entry.month
+  // Bounded loop — 600 months is 50 years, far beyond any real entry, and
+  // guarantees we can't spin on a malformed month string.
+  for (let guard = 0; guard < 600 && key < horizonStartKey; guard++) {
+    if (entry.end_month && key > entry.end_month) break
+    const n = schedule
+      ? Math.max(0, Math.floor(Number(schedule[key]) || 0))
+      : fixedCount
+    total += Math.min(n, cap - total)
+    if (total >= cap) break
+    key = addMonthKey(key, 1)
+  }
+  return cap === Infinity ? total : Math.min(total, cap)
+}
+
+/**
+ * Whole months from one 'YYYY-MM' key to another. Negative clamps to 0.
+ * Distinct from monthsBetween() above, which takes Dates.
+ */
+function monthKeysBetween(fromKey: string, toKey: string): number {
+  const [fy, fm] = fromKey.split('-').map(Number)
+  const [ty, tm] = toKey.split('-').map(Number)
+  if (!fy || !fm || !ty || !tm) return 0
+  return Math.max(0, (ty - fy) * 12 + (tm - fm))
+}
+
+/** Advances a 'YYYY-MM' key by n months. */
+function addMonthKey(key: string, n: number): string {
+  const [y, m] = key.split('-').map(Number)
+  if (!y || !m) return key
+  const total = (y * 12 + (m - 1)) + n
+  const ny = Math.floor(total / 12)
+  const nm = (total % 12) + 1
+  return `${ny}-${String(nm).padStart(2, '0')}`
+}
+
 // ─── Orchestrator ────────────────────────────────────────────────────────────
 
 export interface ForecastInput {
@@ -501,7 +603,19 @@ export function runForecast(input: ForecastInput): ForecastResult {
   const storedStart = parseISO(input.settings.start_date)
   const thisMonth = startOfMonth(new Date())
   const startDate = isBefore(storedStart, thisMonth) ? thisMonth : storedStart
-  const months = generateMonths(startDate, input.settings.horizon_months)
+
+  // A zero / negative / non-numeric horizon produced an empty months array and
+  // then a TypeError on months[0] / monthly[0], surfacing as an opaque 500 from
+  // /api/calculate. Fail with an actionable message instead.
+  const horizonMonths = Math.floor(Number(input.settings.horizon_months))
+  if (!Number.isFinite(horizonMonths) || horizonMonths < 1) {
+    throw new Error(
+      'forecast_settings.horizon_months must be at least 1 (got ' +
+      `${String(input.settings.horizon_months)}). Update the active row in ` +
+      'forecast_settings.',
+    )
+  }
+  const months = generateMonths(startDate, horizonMonths)
   // Fraction of the current calendar month still ahead of the import date
   // (Truth 4): SF/MF cohorts originating in month 0 are scaled by this so
   // the Forecasted SFR/MFR rollups show the post-import portion only.
@@ -575,11 +689,33 @@ export function runForecast(input: ForecastInput): ForecastResult {
     input.loanPrograms[0] ??
     null
 
+  const firstMonthKey = months[0].key
+
   const scheduledOriginations: LotOrigination[] = []
   for (const entry of input.newOriginations) {
     if (entry.avg_loan_amount <= 0) continue
-    const startIdx = monthIndexByKey.get(entry.month)
-    if (startIdx === undefined) continue  // series starts outside the horizon
+
+    // A series whose start month is in the PAST must not be dropped. The
+    // horizon always begins at the current month, so every month that rolled by
+    // used to silently delete another entry from the forecast — a 200-lot pool
+    // that started six months ago would vanish entirely instead of continuing
+    // with its remaining lots.
+    //
+    // Instead: clamp the start to month 0 and fast-forward the pool by however
+    // many loans the entry would already have originated before the horizon.
+    let startIdx: number
+    let consumedBeforeHorizon = 0
+    const exactIdx = monthIndexByKey.get(entry.month)
+    if (exactIdx !== undefined) {
+      startIdx = exactIdx
+    } else if (entry.month && entry.month < firstMonthKey) {
+      startIdx = 0
+      consumedBeforeHorizon = countOriginationsBefore(entry, firstMonthKey)
+    } else {
+      // Starts after the horizon ends (or the month is unparseable) — nothing
+      // to contribute to this forecast.
+      continue
+    }
 
     const programId = entry.loan_program_id
       ?? buildersById.get(entry.builder_id)?.default_loan_program_id
@@ -588,13 +724,24 @@ export function runForecast(input: ForecastInput): ForecastResult {
     if (!program) continue
 
     const cap = entry.total_lots && entry.total_lots > 0 ? entry.total_lots : Infinity
-    // end_month is inclusive; an unparseable / out-of-horizon value just means
-    // "no calendar stop within the horizon".
+    // A pool already exhausted before the horizon opened contributes nothing.
+    if (consumedBeforeHorizon >= cap) continue
+
+    // end_month is inclusive. Distinguish "before the horizon" (series already
+    // over — skip) from "after the horizon" (run to the end of the horizon).
+    let lastIdx: number
     const endIdxRaw = entry.end_month ? monthIndexByKey.get(entry.end_month) : undefined
-    const lastIdx = endIdxRaw === undefined ? months.length - 1 : endIdxRaw
+    if (endIdxRaw !== undefined) {
+      lastIdx = endIdxRaw
+    } else if (entry.end_month && entry.end_month < firstMonthKey) {
+      continue  // calendar stop already passed
+    } else {
+      lastIdx = months.length - 1  // no stop, or a stop beyond the horizon
+    }
+
     const schedule = entry.monthly_mode === 'schedule' ? (entry.monthly_schedule ?? {}) : null
 
-    let cumulative = 0
+    let cumulative = consumedBeforeHorizon
     for (let i = startIdx; i <= lastIdx && i < months.length; i++) {
       if (cumulative >= cap) break
       const monthlyCount = schedule
@@ -1152,6 +1299,8 @@ export function runForecast(input: ForecastInput): ForecastResult {
     as_of_date: input.asOfDate,
     version_label: input.versionLabel,
     total_active_loans: input.loans.length,
+    unclassified_loan_count: loansByType.UNKNOWN.length,
+    no_maturity_loan_count: input.loans.filter(l => !l.current_loan_due_date).length,
     active_loans_outstanding: {
       sfr:           sumDisbursed(sfrLoans),
       mfr:           sumDisbursed(loansByType.MFR),

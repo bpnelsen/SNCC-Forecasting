@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
+import { requireUser } from '@/lib/auth'
 
 // Supabase / PostgREST errors are plain objects; String(e) collapses them to
 // "[object Object]". Surface message / details / hint / code instead.
@@ -15,7 +16,11 @@ function errMessage(e: unknown): string {
 }
 
 // POST (not PUT) updates an existing loan — some hosts reject PUT with 405.
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const denied = await requireUser()
+  if (denied) return denied
+  const { id } = await params
+
   try {
     const body = await req.json()
     const sb   = createServiceClient()
@@ -40,12 +45,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     // Chaining .select().single() forces Supabase to return the updated row.
-    // If params.id didn't match anything we get a real error instead of a
+    // If id didn't match anything we get a real error instead of a
     // silent 0-row update that looks like a success.
     const { data, error } = await sb
       .from('a_and_d_loans')
       .update(payload)
-      .eq('id', params.id)
+      .eq('id', id)
       .select()
       .single()
 
@@ -56,10 +61,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const denied = await requireUser()
+  if (denied) return denied
+  const { id } = await params
+
   try {
     const sb = createServiceClient()
-    const { error } = await sb.from('a_and_d_loans').delete().eq('id', params.id)
+    const { error } = await sb.from('a_and_d_loans').delete().eq('id', id)
     if (error) throw error
     return NextResponse.json({ ok: true })
   } catch (e) {

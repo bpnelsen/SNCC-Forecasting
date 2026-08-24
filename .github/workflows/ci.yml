@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      # Supabase env vars are only read at request time, but `next build`
+      # prerenders pages, so placeholders keep the build self-contained.
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+          SUPABASE_SERVICE_ROLE_KEY: placeholder-service-key
+          SIGNUP_ALLOWED_DOMAINS: ""
+
+  migrations:
+    # Applies every migration to a clean Postgres, twice, so a non-idempotent
+    # or syntactically broken migration fails here instead of in the Supabase
+    # SQL editor.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+        ports: ['5432:5432']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create the Supabase roles the migrations reference
+        run: |
+          psql "$DB" -c "create role anon nologin;" \
+                     -c "create role authenticated nologin;" \
+                     -c "create role service_role nologin bypassrls;"
+        env:
+          DB: postgresql://postgres:postgres@localhost:5432/postgres
+          PGPASSWORD: postgres
+
+      - name: Apply migrations (first pass)
+        run: for f in supabase/migrations/*.sql; do echo "-- $f"; psql "$DB" -v ON_ERROR_STOP=1 -q -f "$f"; done
+        env:
+          DB: postgresql://postgres:postgres@localhost:5432/postgres
+
+      - name: Apply migrations again (must be idempotent)
+        run: for f in supabase/migrations/*.sql; do echo "-- $f"; psql "$DB" -v ON_ERROR_STOP=1 -q -f "$f"; done
+        env:
+          DB: postgresql://postgres:postgres@localhost:5432/postgres
+
+      - name: Assert RLS is enabled on every table
+        run: |
+          UNPROTECTED=$(psql "$DB" -tAc "select count(*) from pg_class where relnamespace='public'::regnamespace and relkind='r' and not relrowsecurity;")
+          echo "tables without RLS: $UNPROTECTED"
+          test "$UNPROTECTED" = "0"
+        env:
+          DB: postgresql://postgres:postgres@localhost:5432/postgres

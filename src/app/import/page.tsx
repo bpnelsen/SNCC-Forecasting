@@ -1,13 +1,14 @@
 'use client'
 
 import { useCallback, useState } from 'react'
-import { useDropzone } from 'react-dropzone'
+import { useDropzone, type FileRejection } from 'react-dropzone'
 import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, X } from 'lucide-react'
 
 interface ImportResult {
   version_id: string
   loan_count: number
   label: string
+  warnings?: string[]
 }
 
 export default function ImportPage() {
@@ -18,13 +19,38 @@ export default function ImportPage() {
   const [result, setResult]     = useState<ImportResult | null>(null)
   const [error, setError]       = useState<string | null>(null)
 
-  const onDrop = useCallback((accepted: File[]) => {
-    if (accepted[0]) { setFile(accepted[0]); setResult(null); setError(null) }
+  const onDrop = useCallback((accepted: File[], rejected: FileRejection[]) => {
+    if (accepted[0]) {
+      setFile(accepted[0]); setResult(null); setError(null)
+      return
+    }
+    // Without this, an unsupported file (a .csv, a .pdf, an old .xls when the
+    // accept list excluded it) was dropped and *nothing* happened at all — no
+    // file, no message, no clue why.
+    if (rejected.length > 0) {
+      const r = rejected[0]
+      setFile(null); setResult(null)
+      setError(
+        `"${r.file.name}" wasn't accepted: ${r.errors.map(e => e.message).join('; ')}. ` +
+        'Supported formats are .xlsx, .xlsm and .xls, up to 4 MB.',
+      )
+    }
   }, [])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop, accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] },
+    onDrop,
+    // The Current Report is exported as .xlsx, but macro-enabled (.xlsm) and
+    // legacy (.xls) workbooks parse identically and used to be rejected in
+    // silence. Extensions are listed as well as MIME types because browsers
+    // report these inconsistently.
+    accept: {
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+      'application/vnd.ms-excel.sheet.macroEnabled.12': ['.xlsm'],
+      'application/vnd.ms-excel': ['.xls'],
+    },
     maxFiles: 1,
+    // Matches the server-side guard; Vercel rejects bodies over ~4.5 MB.
+    maxSize: 4 * 1024 * 1024,
   })
 
   const submit = async () => {
@@ -61,8 +87,18 @@ export default function ImportPage() {
           <div>
             <div className="text-success-light font-medium">Import successful!</div>
             <div className="text-fg-dim mt-0.5 text-xs">
-              "{result.label}" — {result.loan_count} loans imported and set as active version.
+              &ldquo;{result.label}&rdquo; — {result.loan_count} loans imported and set as active version.
             </div>
+            {result.warnings && result.warnings.length > 0 && (
+              <ul className="mt-2 space-y-1">
+                {result.warnings.map((w, i) => (
+                  <li key={i} className="text-[11px] text-danger flex items-start gap-1.5">
+                    <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" />
+                    <span>{w}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
       )}

@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { Builder, LoanProgram, LandBucketProject, NewOriginationEntry } from '@/lib/types'
 import { formatCurrency } from '@/lib/utils'
+import { originationsInMonth } from '@/lib/calculator'
 
 type FormState = Omit<NewOriginationEntry, 'id'> & { id?: string }
 
@@ -63,6 +64,15 @@ function defaultMonth(): string {
   const d = new Date()
   d.setDate(1)
   d.setMonth(d.getMonth() + 1)
+  return d.toISOString().slice(0, 7)
+}
+
+// The current calendar month in YYYY-MM. This is the month the forecast engine
+// anchors its horizon to (runForecast clamps the start to the current month),
+// so it is the first month of a schedule that can still affect the forecast.
+function currentMonthKey(): string {
+  const d = new Date()
+  d.setDate(1)
   return d.toISOString().slice(0, 7)
 }
 
@@ -141,8 +151,12 @@ export default function OriginationsPage() {
   const grouped = groupEntries(entries, builders, projects)
   const grand = sumEntries(entries)
 
+  // No max-width: this table carries the most columns in the app (builder,
+  // development, start, stop, per-month, this-month, totals, program, rate)
+  // and was being squeezed into 1227px. Matches the Dashboard and Forecast
+  // tabs, which are also full-bleed.
   return (
-    <div className="p-6 space-y-6 max-w-[1227px]">
+    <div className="p-6 space-y-6">
       <div className="flex items-center justify-between fade-up fade-up-1">
         <div>
           <h1 className="text-lg font-medium text-fg-strong flex items-center gap-2">
@@ -181,6 +195,7 @@ export default function OriginationsPage() {
                 <th>Start</th>
                 <th>Stop</th>
                 <th className="text-right">Per Month</th>
+                <th className="text-right">This Month</th>
                 <th className="text-right">Total Loans</th>
                 <th className="text-right">Avg Loan ($)</th>
                 <th className="text-right">Total ($)</th>
@@ -191,7 +206,7 @@ export default function OriginationsPage() {
             </thead>
             <tbody>
               {entries.length === 0 ? (
-                <tr><td colSpan={11} className="text-center text-xs text-fg-dim py-8">
+                <tr><td colSpan={12} className="text-center text-xs text-fg-dim py-8">
                   No new-origination entries yet. Click <span className="text-accent">New Entry</span> to add one.
                 </td></tr>
               ) : grouped.map(builderGroup => (
@@ -209,6 +224,7 @@ export default function OriginationsPage() {
                   <td colSpan={4} className="uppercase text-[10px] tracking-wide">
                     Grand total · {entries.length} entr{entries.length === 1 ? 'y' : 'ies'}
                   </td>
+                  <td className="num text-fg-dim">—</td>
                   <td className="num text-fg-dim">—</td>
                   <td className="num">{grand.count}</td>
                   <td className="num text-fg-dim">—</td>
@@ -337,6 +353,11 @@ function BuilderBlock({
               const perMonth = e.monthly_mode === 'schedule'
                 ? 'schedule'
                 : `${e.loan_count}/mo`
+              // What this entry actually originates in the CURRENT month —
+              // the first month the forecast horizon covers. Zero here means
+              // the entry contributes nothing to this month's numbers, which
+              // is easy to miss when the per-month grid is collapsed.
+              const thisMonth = originationsInMonth(e, currentMonthKey())
               return (
                 <tr key={e.id}>
                   <td className="text-fg font-medium">{group.builderName}</td>
@@ -346,6 +367,12 @@ function BuilderBlock({
                   <td className="font-mono text-[10px]">{e.month}</td>
                   <td className="text-[10px]">{stopLabel(e)}</td>
                   <td className="num text-[10px]">{perMonth}</td>
+                  <td
+                    className={`num text-[10px] ${thisMonth.count > 0 ? 'text-fg' : 'text-danger'}`}
+                    title={thisMonth.reason}
+                  >
+                    {thisMonth.count > 0 ? thisMonth.count : '0'}
+                  </td>
                   <td className="num">{t.count}</td>
                   <td className="num">{formatCurrency(e.avg_loan_amount, true)}</td>
                   <td className="num">{formatCurrency(t.amount, true)}</td>
@@ -386,7 +413,7 @@ function BuilderBlock({
               <tr key={proj.key + '-sub'} className="bg-surface text-fg-dim text-[10px]">
                 <td />
                 <td className="italic uppercase tracking-wide">{proj.projectName} subtotal</td>
-                <td colSpan={3} />
+                <td colSpan={4} />
                 <td className="num">{projSubtotal.count}</td>
                 <td className="num">—</td>
                 <td className="num">{formatCurrency(projSubtotal.amount, true)}</td>
@@ -400,6 +427,7 @@ function BuilderBlock({
         <td colSpan={4} className="uppercase text-[10px] tracking-wide">
           {group.builderName} subtotal · {builderEntries.length} entr{builderEntries.length === 1 ? 'y' : 'ies'}
         </td>
+        <td className="num text-fg-dim">—</td>
         <td className="num text-fg-dim">—</td>
         <td className="num">{builderSubtotal.count}</td>
         <td className="num text-fg-dim">—</td>
@@ -566,13 +594,34 @@ function EntryEditor({
               if (totalLoans === 0) {
                 return <span className="text-fg-dim">No loans scheduled — set per-month counts, a cap, or a start month inside the horizon.</span>
               }
-              const first = series[0].key
-              const last = series[series.length - 1].key
+              // Split the series at the current month. Months already elapsed
+              // are completed production sitting in the Loans tab, so folding
+              // them into one "originates N loans · $X" headline double-counts
+              // them against the forecast and contradicts the grid above,
+              // which only shows what is still to come.
+              const nowKey = currentMonthKey()
+              const ahead = series.filter(x => x.key >= nowKey)
+              const booked = series.filter(x => x.key < nowKey)
+              const aheadLoans = ahead.reduce((s, x) => s + x.count, 0)
+              const bookedLoans = booked.reduce((s, x) => s + x.count, 0)
               return (
                 <span className="text-fg">
-                  Originates <strong>{totalLoans}</strong> loans over <strong>{series.length}</strong> month
-                  {series.length === 1 ? '' : 's'} ({first} → {last}) ·
-                  total {formatCurrency(totalLoans * form.avg_loan_amount, false)}
+                  {aheadLoans > 0 ? (
+                    <>
+                      Originates <strong>{aheadLoans}</strong> more loan{aheadLoans === 1 ? '' : 's'} over{' '}
+                      <strong>{ahead.length}</strong> month{ahead.length === 1 ? '' : 's'} (
+                      {ahead[0].key} → {ahead[ahead.length - 1].key}) ·
+                      total {formatCurrency(aheadLoans * form.avg_loan_amount, false)}
+                    </>
+                  ) : (
+                    <span className="text-fg-dim">Nothing left to originate from {nowKey} on.</span>
+                  )}
+                  {bookedLoans > 0 && (
+                    <span className="text-fg-dim">
+                      {' '}· plus <strong>{bookedLoans}</strong> already started before{' '}
+                      {nowKey} (booked in Loans; counts against the cap)
+                    </span>
+                  )}
                 </span>
               )
             })()}
@@ -596,8 +645,26 @@ function EntryEditor({
   )
 }
 
-// Per-month count grid for 'schedule' mode. Renders months from startMonth
-// through endMonth (or 24 months if no end month set).
+// Per-month count grid for 'schedule' mode. The window opens at the CURRENT
+// month (or at startMonth when the entry starts in the future) and runs 24
+// months, or to endMonth if that comes first.
+//
+// Why it starts at the current month rather than at startMonth: months that
+// have already elapsed are completed production, and those loans are in the
+// Loans tab as actual booked loans. An editable cell for a past month is a
+// place to schedule loans that already exist, and the engine wouldn't originate
+// them anyway — runForecast clamps its horizon to the current month. Starting
+// here also means the current month is always the first cell, rather than
+// sitting somewhere down a scroll box for an entry created a year ago.
+//
+// Elapsed months are hidden, not discarded: whatever is stored for them still
+// draws the Total Lots Cap down, because those lots were genuinely used, and
+// zeroing them out would let the development re-originate them. The hidden
+// total is surfaced above the grid so the cap arithmetic stays explainable.
+//
+// Deliberately NOT extended past endMonth: the engine stops the series at
+// end_month, so cells beyond it would accept numbers that never reach the
+// forecast. That case is called out as a warning instead.
 function ScheduleGrid({
   startMonth, endMonth, value, onChange,
 }: {
@@ -613,17 +680,41 @@ function ScheduleGrid({
       </div>
     )
   }
-  let [y, m] = startMonth.split('-').map(Number)
+  const nowKey = currentMonthKey()
+  // The grid opens at the current month, never earlier: production before this
+  // month is already booked in the Loans tab, so an editable cell for it would
+  // invite scheduling loans that already exist. A future-dated entry still
+  // opens at its own start month.
+  const gridStart = startMonth > nowKey ? startMonth : nowKey
+  // An End Month already in the past leaves no month the engine would read, so
+  // the grid is empty and the warning below carries the explanation. Without
+  // this the loop would still emit one current-month cell, past end_month,
+  // whose value the forecast silently ignores.
+  const endedAlready = !!endMonth && endMonth < gridStart
+  let [y, m] = gridStart.split('-').map(Number)
   const keys: string[] = []
-  for (let i = 0; i < 36; i++) {
+  for (let i = 0; i < 24 && !endedAlready; i++) {
     const key = `${y}-${String(m).padStart(2, '0')}`
     keys.push(key)
     if (endMonth && key >= endMonth) break
-    if (!endMonth && i >= 23) break
     m += 1
     if (m > 12) { m = 1; y += 1 }
   }
   const total = keys.reduce((s, k) => s + (Number(value[k]) || 0), 0)
+
+  // Counts saved against months that have now elapsed. They are no longer
+  // editable, but they are not ignored either: the engine draws them down
+  // against the Total Lots Cap, because those lots really were used. Silently
+  // hiding them would leave the cap shrinking for no visible reason, so the
+  // total is reported instead.
+  const pastKeys = Object.keys(value).filter(k => /^\d{4}-\d{2}$/.test(k) && k < nowKey)
+  const pastTotal = pastKeys.reduce((s, k) => s + Math.max(0, Math.floor(Number(value[k]) || 0)), 0)
+
+  // Reasons the current month may legitimately have no cell.
+  const stopsBeforeNow = !!endMonth && endMonth < nowKey
+  const startsAfterNow = startMonth > nowKey
+  const hasNow = keys.includes(nowKey)
+  const nowCount = Math.max(0, Math.floor(Number(value[nowKey]) || 0))
   const set = (k: string, n: number) => {
     const next = { ...value }
     if (n > 0) next[k] = n
@@ -633,26 +724,83 @@ function ScheduleGrid({
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
-        <div className="text-[10px] text-fg-dim">Per-month loan counts</div>
         <div className="text-[10px] text-fg-dim">
-          Sum: <span className="text-fg font-mono">{total}</span>
+          Per-month loan counts
+          {hasNow && (
+            <span className="ml-1.5 text-fg-dim">
+              · this month (<span className="font-mono text-accent">{nowKey}</span>):{' '}
+              <span className={`font-mono ${nowCount > 0 ? 'text-fg' : 'text-danger'}`}>{nowCount}</span>
+            </span>
+          )}
+        </div>
+        <div className="text-[10px] text-fg-dim">
+          Sum from this month: <span className="text-fg font-mono">{total}</span>
         </div>
       </div>
+
+      {/* The current month is the first month the forecast can still act on, so
+          call out when it has no cell or a zero count rather than letting the
+          entry quietly contribute nothing this month. */}
+      {stopsBeforeNow && (
+        <div className="text-[10px] text-danger mb-1">
+          End Month (<span className="font-mono">{endMonth}</span>) is before this month
+          (<span className="font-mono">{nowKey}</span>), so this entry originates nothing
+          from now on. Extend End Month to schedule loans for the current month.
+        </div>
+      )}
+      {!stopsBeforeNow && startsAfterNow && (
+        <div className="text-[10px] text-fg-dim mb-1 italic">
+          Series starts <span className="font-mono">{startMonth}</span>, after this month
+          (<span className="font-mono">{nowKey}</span>) — nothing is scheduled for the current
+          month by design. Move Start Month back to schedule loans now.
+        </div>
+      )}
+      {hasNow && nowCount === 0 && (
+        <div className="text-[10px] text-danger mb-1">
+          This month (<span className="font-mono">{nowKey}</span>) is set to 0, so this entry
+          originates no loans in the current forecast month. Set a count below if that is wrong.
+        </div>
+      )}
+      {pastTotal > 0 && (
+        <div className="text-[10px] text-fg-dim mb-1 italic">
+          <span className="font-mono">{pastTotal}</span> loan(s) were scheduled across{' '}
+          {pastKeys.length} month(s) before <span className="font-mono">{nowKey}</span>. Those are
+          already booked in the Loans tab, so they are not editable here — but they still count
+          against the Total Lots Cap, since those lots were used.
+        </div>
+      )}
+
       <div className="grid grid-cols-4 gap-2 p-3 rounded border border-border-strong max-h-48 overflow-y-auto">
-        {keys.map(k => (
-          <label key={k} className="flex items-center gap-1.5">
-            <span className="text-[10px] font-mono text-fg-dim w-14 shrink-0">{k}</span>
-            <input
-              type="number"
-              min={0}
-              className="form-input text-right text-xs py-1 px-2"
-              value={value[k] ?? 0}
-              onChange={e => set(k, Math.max(0, parseInt(e.target.value) || 0))}
-            />
-          </label>
-        ))}
+        {keys.length === 0 && (
+          <div className="col-span-4 text-[10px] text-fg-dim italic">
+            No schedulable months — see above.
+          </div>
+        )}
+        {keys.map(k => {
+          const isNow = k === nowKey
+          return (
+            <label
+              key={k}
+              className={`flex items-center gap-1.5 ${isNow ? 'rounded bg-accent/10 -mx-1 px-1' : ''}`}
+              title={isNow ? 'Current month — the first month the forecast can act on' : undefined}
+            >
+              <span className={`text-[10px] font-mono w-14 shrink-0 ${
+                isNow ? 'text-accent font-semibold' : 'text-fg-dim'
+              }`}>{k}</span>
+              <input
+                type="number"
+                min={0}
+                className="form-input text-right text-xs py-1 px-2"
+                value={value[k] ?? 0}
+                onChange={e => set(k, Math.max(0, parseInt(e.target.value) || 0))}
+              />
+            </label>
+          )
+        })}
       </div>
       <div className="text-[10px] text-fg-dim mt-1 italic">
+        Starts at <span className="font-mono">{gridStart}</span>
+        {gridStart === nowKey && ' (the current month) — earlier production is already booked in the Loans tab'}.
         A Total Lots Cap still applies on top of this schedule (whichever stops first).
       </div>
     </div>
@@ -755,7 +903,7 @@ function DrawCurveShortcut({
       {open && (
         <div className="p-4 space-y-4 border-t border-border">
           <p className="text-[10px] text-fg-dim">
-            Shortcut to the same loan-program rows you'd edit on Assumptions. Changes
+            Shortcut to the same loan-program rows you&rsquo;d edit on Assumptions. Changes
             apply to every New Originations entry assigned to that program.
           </p>
 

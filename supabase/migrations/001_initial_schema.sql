@@ -80,7 +80,11 @@ insert into assumptions (
   nhcf_loan_sizes,
   ps_unit_counts,
   land_bucket
-) values (
+)
+-- Guarded by `where not exists` so this file is re-runnable. Without it, a
+-- second run inserts another is_active row and violates
+-- idx_one_active_assumptions.
+select
   true,
   '{
     "arive_garretts":  {"0":0,"1":0,"2":0,"3":0,"4":0,"5":0,"6":0,"7":0,"8":0,"9":0,"10":0,"11":0},
@@ -125,4 +129,4 @@ insert into assumptions (
       "start_date":"2024-03-01","completion_date":"2025-03-01","lot_release_start":"2025-04-01"
     }
   ]'
-);
+where not exists (select 1 from assumptions);

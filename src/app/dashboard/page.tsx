@@ -266,6 +266,37 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Data-quality banner. Both conditions distort the numbers on this page
+          without producing any error, so they are surfaced here rather than
+          left to be discovered as an unexplained balance. */}
+      {(data.unclassified_loan_count > 0 || data.no_maturity_loan_count > 0) && (
+        <div className="card fade-up fade-up-1 p-3 border-danger-strong/40 bg-danger-strong/5 space-y-1.5">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-danger">
+            <AlertCircle className="w-3.5 h-3.5" />
+            Check this import
+          </div>
+          {data.unclassified_loan_count > 0 && (
+            <div className="text-[11px] text-fg-dim">
+              <strong className="text-fg">{data.unclassified_loan_count}</strong> of{' '}
+              {data.total_active_loans} loans could not be classified from their Loan
+              Program. Imported loans typed UNKNOWN contribute to{' '}
+              <strong className="text-fg">no segment</strong>, so their balances are
+              missing from the totals below. Set the type on the{' '}
+              <Link href="/loans" className="text-accent underline">Loans</Link> tab, or
+              update the rules in <code>classifyLoan</code>.
+            </div>
+          )}
+          {data.no_maturity_loan_count > 0 && (
+            <div className="text-[11px] text-fg-dim">
+              <strong className="text-fg">{data.no_maturity_loan_count}</strong> of{' '}
+              {data.total_active_loans} loans have no maturity date. Those balances are
+              held flat for the whole horizon instead of paying off, so forecast
+              balances trend high.
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Filter strip */}
       <div className="card fade-up fade-up-1 p-3 flex items-center gap-2 flex-wrap">
         <div className="flex items-center gap-1.5 text-xs text-fg-dim mr-1">

@@ -442,7 +442,7 @@ export default function LoansPage() {
 
       <div className="text-[10px] text-fg-dim italic px-1 space-y-0.5">
         <div>
-          First month uses each loan's <code>loan_amount_disbursed</code>; later months interpolate linearly toward
+          First month uses each loan&rsquo;s <code>loan_amount_disbursed</code>; later months interpolate linearly toward
           max(<code>projected_balance</code>, <code>current_loan_amount</code>, <code>loan_amount_disbursed</code>); the maturity month and beyond are zero.
         </div>
         <div>

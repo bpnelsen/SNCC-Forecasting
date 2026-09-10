@@ -171,7 +171,7 @@ export default function AskPage() {
       </form>
 
       <div className="text-[9px] text-fg-dim italic px-1 mt-2">
-        The agent only sees what its tools return — it can't write to the DB
+        The agent only sees what its tools return — it can&rsquo;t write to the DB
         or take actions, only answer questions. Numbers come from the same engine
         that powers the Dashboard and Forecast pages, so they should match exactly.
       </div>

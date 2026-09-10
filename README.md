@@ -19,7 +19,6 @@ Construction lending portfolio intelligence dashboard for Security National Fina
 |----------|--------------------------------|
 | Frontend | Next.js 15 (App Router), React 19 |
 | Database | Supabase (PostgreSQL)          |
-| Auth     | Supabase Auth (email/password) |
 | Hosting  | Vercel                         |
 | Charts   | Recharts                       |
 | Tests    | Vitest                         |
@@ -71,22 +70,7 @@ true, and asserts RLS is enabled on every table.
 | `020` | **Enables RLS on every table** |
 | `021` | Drops the orphaned `scheduled_originations` table (guarded — refuses if it has rows) |
 
-### 4. Lock down account creation
-
-The app ships a `/signup` page. Decide how accounts get made:
-
-**Recommended — admin-created accounts only.** Leave `SIGNUP_ALLOWED_DOMAINS`
-empty, and in Supabase → **Authentication → Sign In / Providers** turn **off**
-"Allow new users to sign up". Then create each user under
-**Authentication → Users → Add user** (tick "Auto Confirm User").
-
-**Or — self-service, restricted to your domains.** Set
-`SIGNUP_ALLOWED_DOMAINS=securitynational.com` and **still** turn off "Allow new
-users to sign up" in Supabase. That setting matters: the anon key is public, so
-without it anyone can POST to Supabase's own `/auth/v1/signup` and create an
-account regardless of the allowlist in this app.
-
-### 5. Configure environment variables
+### 4. Configure environment variables
 
 ```bash
 cp .env.local.example .env.local
@@ -98,14 +82,14 @@ file for what each one does.
 > ⚠️ Never commit `.env.local` — it's in `.gitignore`.
 > `SUPABASE_SERVICE_ROLE_KEY` bypasses RLS. Keep it server-side only.
 
-### 6. Run locally
+### 5. Run locally
 
 ```bash
-npm run dev       # http://localhost:3000 — redirects to /login
+npm run dev       # http://localhost:3000 — opens straight on the dashboard
 npm run verify    # typecheck + lint + tests
 ```
 
-### 7. Deploy to Vercel
+### 6. Deploy to Vercel
 
 1. **New Project** → import the GitHub repo
 2. Framework: **Next.js** (auto-detected)
@@ -121,28 +105,30 @@ branch is merged into the production branch.
 
 ## Security model
 
-All data access goes through `/api/*` route handlers using the **service role**
-key, which bypasses RLS. Three layers keep that from being world-readable:
+**This app has no authentication.** There is no login page and no session
+check. Every page and every `/api/*` route is reachable by anyone who can reach
+the deployment, and every route reads and writes through the **service-role**
+Supabase key, which bypasses Row Level Security. That includes `DELETE` on every
+table and `POST /api/import`, which replaces the active loan version.
 
-1. **`src/middleware.ts`** requires a signed-in Supabase user for every page
-   **and every `/api/*` route**. Pages redirect to `/login`; API requests get a
-   401. Missing env vars fail closed (503). Only `/login`, `/signup` and
-   `/api/auth/signup` are public.
-2. **`requireUser()`** (`src/lib/auth.ts`) re-checks the session inside all 48
-   route handlers, so a mistake in the middleware `matcher` can't silently
-   reopen the API.
-3. **Migration `020`** enables RLS with **no policies** and revokes table grants
-   from `anon` and `authenticated`. `NEXT_PUBLIC_SUPABASE_ANON_KEY` is visible
-   in the browser bundle, so the Supabase REST endpoint is publicly reachable —
-   RLS is what makes that key useless. `service_role` has `BYPASSRLS`, so the
-   app is unaffected.
+App-level auth was deliberately removed (see the "Remove auth" commit). If the
+deployment should not be world-readable, access has to be restricted at the
+hosting layer instead — Vercel **Password Protection** or **Vercel
+Authentication** under Project → Settings → Deployment Protection, or an IP
+allowlist in front of it. Nothing in this repository does that for you.
 
-Account creation is gated by `/api/auth/signup`, which enforces the
-`SIGNUP_ALLOWED_DOMAINS` allowlist server-side and creates users via the admin
-API. See step 4 — the Supabase dashboard setting is the other half of this.
+What the repo *does* still protect:
 
-If you later want the browser to query Supabase directly, you must add explicit
-RLS policies first.
+- **Migration `020`** enables RLS on all 14 tables with no policies and revokes
+  table grants from `anon` and `authenticated`. This matters independently of
+  app login: `NEXT_PUBLIC_SUPABASE_ANON_KEY` is a public value, so without RLS
+  anyone could query `https://<ref>.supabase.co/rest/v1/loans` directly,
+  bypassing this app entirely. RLS is what makes that key useless.
+  `service_role` carries `BYPASSRLS`, so the app's own routes are unaffected —
+  which is exactly why RLS does **not** substitute for restricting access to the
+  deployment.
+- `SUPABASE_SERVICE_ROLE_KEY` is read server-side only and is never prefixed
+  `NEXT_PUBLIC_`, so it does not ship in the browser bundle.
 
 ### Known outstanding items
 
@@ -172,7 +158,7 @@ never exercised. The critical middleware authorization-bypass advisory
 
 ### Import a Current Report
 
-1. Sign in, then go to **Import**
+1. Go to **Import**
 2. Drop your Current Report export (`.xlsx`, `.xlsm` or `.xls`, up to 4 MB)
 3. Add a version label like "March 2026" and click **Import Report**
 
@@ -304,26 +290,22 @@ The app targets Next 15 / React 19. Things that differ from the Next 14 code:
 
 ```
 src/
-├── middleware.ts               # session gate for all pages + /api routes
 ├── app/
-│   ├── login/, signup/         # auth screens
 │   ├── dashboard/              # portfolio dashboard + parent filter
 │   ├── loans/                  # per-loan table, inline type editing
 │   ├── forecast/, originations/
 │   ├── land-bucket/, a-and-d/, hhh-jv/, approved/
 │   ├── assumptions/, import/, versions/
 │   ├── ask/                    # assistant tab
-│   └── api/                    # 28 route handlers, all requireUser()-guarded
+│   └── api/                    # 28 route handlers — unauthenticated, service-role
 ├── components/
 └── lib/
-    ├── auth.ts                 # requireUser() / getUser() / signup allowlist
     ├── fetch-all.ts            # paginates past Supabase's 1,000-row cap
-    ├── supabase.ts             # service-role + browser clients
-    ├── supabase-server.ts      # cookie-backed server client
+    ├── supabase.ts             # service-role client
     ├── parser.ts               # Excel → Loan[]  (+ parser.test.ts)
     ├── calculator.ts           # forecast engine  (+ calculator.test.ts)
     └── types.ts, utils.ts, gemini-tools.ts
-supabase/migrations/            # 001–020, apply all in order
+supabase/migrations/            # 001–021, apply all in order
 .github/workflows/ci.yml        # typecheck, lint, test, build, migrations
 ```
 

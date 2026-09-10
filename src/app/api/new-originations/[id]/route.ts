@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { requireUser } from '@/lib/auth'
 
 // Supabase / PostgREST errors are plain objects; String(e) collapses them
 // to "[object Object]". Surface message / details / hint / code.
@@ -43,8 +42,6 @@ function buildPayload(body: Record<string, unknown>): Record<string, unknown> {
 // Chains .select().single() so a 0-row update surfaces as an explicit error
 // rather than a silent success.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = await requireUser()
-  if (denied) return denied
   const { id } = await params
 
   try {
@@ -65,8 +62,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
 // PUT kept for backwards compatibility but the page now POSTs.
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = await requireUser()
-  if (denied) return denied
   const { id } = await params
 
   try {
@@ -86,8 +81,6 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = await requireUser()
-  if (denied) return denied
   const { id } = await params
 
   try {

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import { parseCurrentReportWithDiagnostics } from '@/lib/parser'
-import { requireUser } from '@/lib/auth'
 
 // Parsing a large workbook plus batched inserts can exceed Vercel's default
 // 10s function limit, which used to abort the import midway.
@@ -30,9 +29,6 @@ function errMessage(e: unknown): string {
 }
 
 export async function POST(req: NextRequest) {
-  const denied = await requireUser()
-  if (denied) return denied
-
   // Declared out here so the catch block can roll back a half-written version.
   let createdVersionId: string | null = null
   const sb = createServiceClient()

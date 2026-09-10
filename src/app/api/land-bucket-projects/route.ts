@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { requireUser } from '@/lib/auth'
 
 // Kept explicit: Next 15 no longer caches GET route handlers by default, but
 // stating it means a future default change can't silently start serving a
@@ -22,9 +21,6 @@ function errMessage(e: unknown): string {
 }
 
 export async function GET() {
-  const denied = await requireUser()
-  if (denied) return denied
-
   try {
     const sb = createServiceClient()
     const { data, error } = await sb
@@ -39,9 +35,6 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const denied = await requireUser()
-  if (denied) return denied
-
   try {
     const body = await req.json()
     const sb   = createServiceClient()

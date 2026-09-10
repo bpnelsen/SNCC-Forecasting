@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { requireUser } from '@/lib/auth'
 
 // Kept explicit: Next 15 no longer caches GET route handlers by default, but
 // stating it means a future default change can't silently start serving a
@@ -8,9 +7,6 @@ import { requireUser } from '@/lib/auth'
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  const denied = await requireUser()
-  if (denied) return denied
-
   try {
     const sb = createServiceClient()
     const { data, error } = await sb
@@ -26,9 +22,6 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
-  const denied = await requireUser()
-  if (denied) return denied
-
   try {
     const { id } = await req.json()
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })

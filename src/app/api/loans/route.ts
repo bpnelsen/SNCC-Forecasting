@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import { UNASSIGNED_PARENT_KEY } from '@/lib/calculator'
-import { requireUser } from '@/lib/auth'
 import { fetchAll } from '@/lib/fetch-all'
 import type { Loan } from '@/lib/types'
 
@@ -11,9 +10,6 @@ import type { Loan } from '@/lib/types'
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  const denied = await requireUser()
-  if (denied) return denied
-
   try {
     const sb = createServiceClient()
 

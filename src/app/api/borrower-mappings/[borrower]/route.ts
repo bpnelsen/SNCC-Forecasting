@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { requireUser } from '@/lib/auth'
 
 function errMessage(e: unknown): string {
   if (e instanceof Error) return e.message
@@ -16,8 +15,6 @@ function errMessage(e: unknown): string {
 // DELETE clears the explicit override for a given borrower. URL segment is
 // URL-encoded; we just decode it before the WHERE clause.
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ borrower: string }> }) {
-  const denied = await requireUser()
-  if (denied) return denied
   const { borrower } = await params
 
   try {

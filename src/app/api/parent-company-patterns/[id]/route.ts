@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { requireUser } from '@/lib/auth'
 
 function errMessage(e: unknown): string {
   if (e instanceof Error) return e.message
@@ -14,8 +13,6 @@ function errMessage(e: unknown): string {
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = await requireUser()
-  if (denied) return denied
   const { id } = await params
 
   try {

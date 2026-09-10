@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { requireUser } from '@/lib/auth'
 
 // Supabase / PostgREST errors are plain objects; String(e) collapses them to
 // "[object Object]". Pull out the most useful fields.
@@ -18,8 +17,6 @@ function errMessage(e: unknown): string {
 // POST = update by id (PUT-405-safe). Used to set parent_company_id on a
 // builder; also handles renames + default rate / program edits.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = await requireUser()
-  if (denied) return denied
   const { id } = await params
 
   try {
@@ -59,8 +56,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = await requireUser()
-  if (denied) return denied
   const { id } = await params
 
   try {

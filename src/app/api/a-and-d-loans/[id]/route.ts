@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { requireUser } from '@/lib/auth'
 
 // Supabase / PostgREST errors are plain objects; String(e) collapses them to
 // "[object Object]". Surface message / details / hint / code instead.
@@ -17,8 +16,6 @@ function errMessage(e: unknown): string {
 
 // POST (not PUT) updates an existing loan — some hosts reject PUT with 405.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = await requireUser()
-  if (denied) return denied
   const { id } = await params
 
   try {
@@ -62,8 +59,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const denied = await requireUser()
-  if (denied) return denied
   const { id } = await params
 
   try {

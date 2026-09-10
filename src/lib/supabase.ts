@@ -1,35 +1,37 @@
 import { createClient } from '@supabase/supabase-js'
 
 /**
- * Reads the required public Supabase config, failing loudly rather than letting
+ * Reads the Supabase project URL, failing loudly rather than letting
  * `undefined!` reach the client constructor (which produces an opaque
  * "Invalid URL" from deep inside supabase-js).
+ *
+ * NEXT_PUBLIC_SUPABASE_ANON_KEY is no longer read anywhere: the browser client
+ * existed only for sign-in, which has been removed. It can stay set in the
+ * environment harmlessly, but nothing depends on it.
  */
-function publicConfig(): { url: string; anonKey: string } {
+function projectUrl(): string {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  if (!url || !anonKey) {
+  if (!url) {
     throw new Error(
-      'Missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY. ' +
-      'Set both in .env.local (local) and in the Vercel project settings (deployed).',
+      'Missing NEXT_PUBLIC_SUPABASE_URL. Set it in .env.local (local) and in ' +
+      'the Vercel project settings (deployed).',
     )
   }
-  return { url, anonKey }
-}
-
-export function createBrowserClient() {
-  const { url, anonKey } = publicConfig()
-  return createClient(url, anonKey)
+  return url
 }
 
 /**
  * Service-role client. Bypasses RLS, so it must NEVER be constructed in code
- * that can run in the browser, and must only be reached after the caller has
- * been authenticated — see requireUser() in src/lib/auth.ts and the session
- * gate in src/middleware.ts.
+ * that can run in the browser.
+ *
+ * NOTE: this app has no authentication. Every /api route uses this client, so
+ * every route is reachable by anyone who can reach the deployment. Row Level
+ * Security (migration 020) still blocks the public anon key from hitting the
+ * Supabase REST endpoint directly, but it does not restrict these routes —
+ * service_role carries BYPASSRLS by design.
  */
 export function createServiceClient() {
-  const { url } = publicConfig()
+  const url = projectUrl()
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceKey) {
     throw new Error(

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
-import { requireUser } from '@/lib/auth'
 import { fetchAll } from '@/lib/fetch-all'
 
 export const dynamic = 'force-dynamic'
@@ -20,9 +19,6 @@ function errMessage(e: unknown): string {
 // loan count. Used by the Assumptions Parent Companies UI to populate the
 // borrower assignment list without re-deriving from the full loans payload.
 export async function GET() {
-  const denied = await requireUser()
-  if (denied) return denied
-
   try {
     const sb = createServiceClient()
 

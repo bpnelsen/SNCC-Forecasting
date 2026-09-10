@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { addMonths, format, startOfMonth } from 'date-fns'
-import { runForecast, type ForecastInput } from './calculator'
+import { runForecast, originationsInMonth, type ForecastInput } from './calculator'
 import type {
   Loan, LoanProgram, Builder, ForecastSettings, NewOriginationEntry, AAndDLoan,
 } from './types'
@@ -340,5 +340,87 @@ describe('data-quality counters', () => {
     // A loan with no maturity is still on the books in the final month.
     const last = result.months[result.months.length - 1]
     expect(last.sfr).toBeGreaterThan(0)
+  })
+})
+
+// ─── originationsInMonth: the figure the New Originations UI shows ───────────
+
+describe('originationsInMonth', () => {
+  const thisMonth = monthKey(0)
+
+  it('reports the fixed-mode count for the current month', () => {
+    const r = originationsInMonth(origination({ month: monthKey(-2), loan_count: 5, total_lots: null }), thisMonth)
+    expect(r.count).toBe(5)
+  })
+
+  it('reports 0 with a reason when the schedule has no entry for the month', () => {
+    const r = originationsInMonth(origination({
+      month: monthKey(-2),
+      monthly_mode: 'schedule',
+      monthly_schedule: { [monthKey(-2)]: 4 },   // nothing for this month
+      total_lots: null,
+    }), thisMonth)
+    expect(r.count).toBe(0)
+    expect(r.reason).toContain('No per-month count set')
+  })
+
+  it('reports 0 when the series starts later', () => {
+    const r = originationsInMonth(origination({ month: monthKey(3) }), thisMonth)
+    expect(r.count).toBe(0)
+    expect(r.reason).toContain('after')
+  })
+
+  it('reports 0 when end_month has already passed', () => {
+    const r = originationsInMonth(origination({ month: monthKey(-6), end_month: monthKey(-2) }), thisMonth)
+    expect(r.count).toBe(0)
+    expect(r.reason).toContain('End Month')
+  })
+
+  it('reports 0 when the lot pool was exhausted before this month', () => {
+    // 20 lots at 5/month finishes four months in, all of it before now.
+    const r = originationsInMonth(origination({
+      month: monthKey(-10), loan_count: 5, total_lots: 20,
+    }), thisMonth)
+    expect(r.count).toBe(0)
+    expect(r.reason).toContain('Cap')
+  })
+
+  it('clamps to whatever is left of the lot pool', () => {
+    // Started 2 months ago at 5/month = 10 consumed, cap 12 -> only 2 left.
+    const r = originationsInMonth(origination({
+      month: monthKey(-2), loan_count: 5, total_lots: 12,
+    }), thisMonth)
+    expect(r.count).toBe(2)
+  })
+
+  it('agrees with what runForecast actually originates this month', () => {
+    // The whole point of sharing this helper: the number shown in the UI must
+    // match the number the dashboard forecasts, for every one of these shapes.
+    const cases: Partial<NewOriginationEntry>[] = [
+      { month: monthKey(0), loan_count: 3, total_lots: null },
+      { month: monthKey(-2), loan_count: 5, total_lots: null },
+      { month: monthKey(-2), loan_count: 5, total_lots: 12 },
+      { month: monthKey(-10), loan_count: 5, total_lots: 20 },
+      { month: monthKey(3), loan_count: 4, total_lots: null },
+      { month: monthKey(-6), loan_count: 4, end_month: monthKey(-2), total_lots: null },
+      {
+        month: monthKey(-3), monthly_mode: 'schedule', total_lots: null,
+        monthly_schedule: { [monthKey(-3)]: 1, [monthKey(0)]: 7 },
+      },
+      {
+        month: monthKey(-3), monthly_mode: 'schedule', total_lots: null,
+        monthly_schedule: { [monthKey(-3)]: 1 },
+      },
+    ]
+
+    for (const over of cases) {
+      const entry = origination(over)
+      const helper = originationsInMonth(entry, thisMonth)
+      const forecast = runForecast(baseInput({ newOriginations: [entry] }))
+      expect(
+        forecast.months[0].new_origs_by_segment.sfr.count,
+        `mismatch for ${JSON.stringify(over)} — reason: ${helper.reason}`,
+      ).toBe(helper.count)
+    }
   })
 })

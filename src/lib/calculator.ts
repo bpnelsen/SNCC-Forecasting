@@ -527,7 +527,7 @@ function monthZeroFraction(asOfDate: string, monthZeroStart: Date): number {
  * Walks calendar months rather than the horizon array because those months sit
  * outside it by definition.
  */
-function countOriginationsBefore(entry: NewOriginationEntry, horizonStartKey: string): number {
+export function countOriginationsBefore(entry: NewOriginationEntry, horizonStartKey: string): number {
   if (!entry.month || entry.month >= horizonStartKey) return 0
 
   const cap = entry.total_lots && entry.total_lots > 0 ? entry.total_lots : Infinity
@@ -574,6 +574,58 @@ function addMonthKey(key: string, n: number): string {
   const ny = Math.floor(total / 12)
   const nm = (total % 12) + 1
   return `${ny}-${String(nm).padStart(2, '0')}`
+}
+
+/**
+ * How many loans a new-origination entry originates in a single month.
+ *
+ * Exported so the New Originations UI can show the same figure the forecast
+ * uses, instead of reimplementing the expansion rules and drifting from them.
+ * Honours the same three stops as runForecast: the series start, `end_month`,
+ * and the Total Lots Cap drawn down by whatever the entry already originated
+ * in earlier months.
+ *
+ * Returns 0 with a `reason` describing which rule applied, so callers can
+ * explain a zero rather than just displaying it.
+ */
+export function originationsInMonth(
+  entry: NewOriginationEntry,
+  monthKey: string,
+): { count: number; reason: string } {
+  if (!entry.month || !/^\d{4}-\d{2}$/.test(entry.month)) {
+    return { count: 0, reason: 'Start Month is not a valid YYYY-MM.' }
+  }
+  if (entry.month > monthKey) {
+    return { count: 0, reason: `Series starts ${entry.month}, after ${monthKey}.` }
+  }
+  if (entry.end_month && entry.end_month < monthKey) {
+    return { count: 0, reason: `End Month ${entry.end_month} is before ${monthKey}.` }
+  }
+
+  const cap = entry.total_lots && entry.total_lots > 0 ? entry.total_lots : Infinity
+  // Same function the engine uses to fast-forward a series that began earlier.
+  const consumed = countOriginationsBefore(entry, monthKey)
+  if (consumed >= cap) {
+    return {
+      count: 0,
+      reason: `Total Lots Cap (${entry.total_lots}) was used up before ${monthKey}.`,
+    }
+  }
+
+  const wanted = entry.monthly_mode === 'schedule'
+    ? Math.max(0, Math.floor(Number(entry.monthly_schedule?.[monthKey]) || 0))
+    : Math.max(0, Math.floor(entry.loan_count))
+  if (wanted === 0) {
+    return {
+      count: 0,
+      reason: entry.monthly_mode === 'schedule'
+        ? `No per-month count set for ${monthKey}.`
+        : 'Per-month loan count is 0.',
+    }
+  }
+
+  const take = Math.min(wanted, cap - consumed)
+  return { count: take, reason: `${take} loan(s) originate in ${monthKey}.` }
 }
 
 // ─── Orchestrator ────────────────────────────────────────────────────────────

@@ -594,13 +594,34 @@ function EntryEditor({
               if (totalLoans === 0) {
                 return <span className="text-fg-dim">No loans scheduled — set per-month counts, a cap, or a start month inside the horizon.</span>
               }
-              const first = series[0].key
-              const last = series[series.length - 1].key
+              // Split the series at the current month. Months already elapsed
+              // are completed production sitting in the Loans tab, so folding
+              // them into one "originates N loans · $X" headline double-counts
+              // them against the forecast and contradicts the grid above,
+              // which only shows what is still to come.
+              const nowKey = currentMonthKey()
+              const ahead = series.filter(x => x.key >= nowKey)
+              const booked = series.filter(x => x.key < nowKey)
+              const aheadLoans = ahead.reduce((s, x) => s + x.count, 0)
+              const bookedLoans = booked.reduce((s, x) => s + x.count, 0)
               return (
                 <span className="text-fg">
-                  Originates <strong>{totalLoans}</strong> loans over <strong>{series.length}</strong> month
-                  {series.length === 1 ? '' : 's'} ({first} → {last}) ·
-                  total {formatCurrency(totalLoans * form.avg_loan_amount, false)}
+                  {aheadLoans > 0 ? (
+                    <>
+                      Originates <strong>{aheadLoans}</strong> more loan{aheadLoans === 1 ? '' : 's'} over{' '}
+                      <strong>{ahead.length}</strong> month{ahead.length === 1 ? '' : 's'} (
+                      {ahead[0].key} → {ahead[ahead.length - 1].key}) ·
+                      total {formatCurrency(aheadLoans * form.avg_loan_amount, false)}
+                    </>
+                  ) : (
+                    <span className="text-fg-dim">Nothing left to originate from {nowKey} on.</span>
+                  )}
+                  {bookedLoans > 0 && (
+                    <span className="text-fg-dim">
+                      {' '}· plus <strong>{bookedLoans}</strong> already started before{' '}
+                      {nowKey} (booked in Loans; counts against the cap)
+                    </span>
+                  )}
                 </span>
               )
             })()}
@@ -624,17 +645,22 @@ function EntryEditor({
   )
 }
 
-// Per-month count grid for 'schedule' mode. Renders months from startMonth
-// through endMonth (or 24 months if no end month set), and — when no end month
-// caps it — always far enough forward to include the CURRENT month.
+// Per-month count grid for 'schedule' mode. The window opens at the CURRENT
+// month (or at startMonth when the entry starts in the future) and runs 24
+// months, or to endMonth if that comes first.
 //
-// Why the current-month guarantee: the engine anchors its horizon to the
-// current month, and in 'schedule' mode reads monthly_schedule[monthKey] for
-// each month. A schedule with no entry for the current month originates zero
-// loans this month. An entry created months ago rendered a grid starting at its
-// own (now stale) start month, so the current month could sit far down a scroll
-// box, or fall outside the default 24-month window entirely — leaving no cell
-// to type this month's count into.
+// Why it starts at the current month rather than at startMonth: months that
+// have already elapsed are completed production, and those loans are in the
+// Loans tab as actual booked loans. An editable cell for a past month is a
+// place to schedule loans that already exist, and the engine wouldn't originate
+// them anyway — runForecast clamps its horizon to the current month. Starting
+// here also means the current month is always the first cell, rather than
+// sitting somewhere down a scroll box for an entry created a year ago.
+//
+// Elapsed months are hidden, not discarded: whatever is stored for them still
+// draws the Total Lots Cap down, because those lots were genuinely used, and
+// zeroing them out would let the development re-originate them. The hidden
+// total is surfaced above the grid so the cap arithmetic stays explainable.
 //
 // Deliberately NOT extended past endMonth: the engine stops the series at
 // end_month, so cells beyond it would accept numbers that never reach the
@@ -655,21 +681,34 @@ function ScheduleGrid({
     )
   }
   const nowKey = currentMonthKey()
-  let [y, m] = startMonth.split('-').map(Number)
+  // The grid opens at the current month, never earlier: production before this
+  // month is already booked in the Loans tab, so an editable cell for it would
+  // invite scheduling loans that already exist. A future-dated entry still
+  // opens at its own start month.
+  const gridStart = startMonth > nowKey ? startMonth : nowKey
+  // An End Month already in the past leaves no month the engine would read, so
+  // the grid is empty and the warning below carries the explanation. Without
+  // this the loop would still emit one current-month cell, past end_month,
+  // whose value the forecast silently ignores.
+  const endedAlready = !!endMonth && endMonth < gridStart
+  let [y, m] = gridStart.split('-').map(Number)
   const keys: string[] = []
-  // Hard ceiling of 120 months so a far-past start month can still reach the
-  // current month without the loop being unbounded.
-  for (let i = 0; i < 120; i++) {
+  for (let i = 0; i < 24 && !endedAlready; i++) {
     const key = `${y}-${String(m).padStart(2, '0')}`
     keys.push(key)
     if (endMonth && key >= endMonth) break
-    // Default window is 24 months, but keep going until the current month is
-    // covered so there is always a cell for it.
-    if (!endMonth && i >= 23 && key >= nowKey) break
     m += 1
     if (m > 12) { m = 1; y += 1 }
   }
   const total = keys.reduce((s, k) => s + (Number(value[k]) || 0), 0)
+
+  // Counts saved against months that have now elapsed. They are no longer
+  // editable, but they are not ignored either: the engine draws them down
+  // against the Total Lots Cap, because those lots really were used. Silently
+  // hiding them would leave the cap shrinking for no visible reason, so the
+  // total is reported instead.
+  const pastKeys = Object.keys(value).filter(k => /^\d{4}-\d{2}$/.test(k) && k < nowKey)
+  const pastTotal = pastKeys.reduce((s, k) => s + Math.max(0, Math.floor(Number(value[k]) || 0)), 0)
 
   // Reasons the current month may legitimately have no cell.
   const stopsBeforeNow = !!endMonth && endMonth < nowKey
@@ -695,7 +734,7 @@ function ScheduleGrid({
           )}
         </div>
         <div className="text-[10px] text-fg-dim">
-          Sum: <span className="text-fg font-mono">{total}</span>
+          Sum from this month: <span className="text-fg font-mono">{total}</span>
         </div>
       </div>
 
@@ -722,23 +761,31 @@ function ScheduleGrid({
           originates no loans in the current forecast month. Set a count below if that is wrong.
         </div>
       )}
+      {pastTotal > 0 && (
+        <div className="text-[10px] text-fg-dim mb-1 italic">
+          <span className="font-mono">{pastTotal}</span> loan(s) were scheduled across{' '}
+          {pastKeys.length} month(s) before <span className="font-mono">{nowKey}</span>. Those are
+          already booked in the Loans tab, so they are not editable here — but they still count
+          against the Total Lots Cap, since those lots were used.
+        </div>
+      )}
 
       <div className="grid grid-cols-4 gap-2 p-3 rounded border border-border-strong max-h-48 overflow-y-auto">
+        {keys.length === 0 && (
+          <div className="col-span-4 text-[10px] text-fg-dim italic">
+            No schedulable months — see above.
+          </div>
+        )}
         {keys.map(k => {
           const isNow = k === nowKey
-          const isPast = k < nowKey
           return (
             <label
               key={k}
               className={`flex items-center gap-1.5 ${isNow ? 'rounded bg-accent/10 -mx-1 px-1' : ''}`}
-              title={
-                isNow ? 'Current month — the first month the forecast can act on'
-                : isPast ? 'Already elapsed; counts here only draw down the lot pool, they add no new balance'
-                : undefined
-              }
+              title={isNow ? 'Current month — the first month the forecast can act on' : undefined}
             >
               <span className={`text-[10px] font-mono w-14 shrink-0 ${
-                isNow ? 'text-accent font-semibold' : isPast ? 'text-border-strong' : 'text-fg-dim'
+                isNow ? 'text-accent font-semibold' : 'text-fg-dim'
               }`}>{k}</span>
               <input
                 type="number"
@@ -752,9 +799,9 @@ function ScheduleGrid({
         })}
       </div>
       <div className="text-[10px] text-fg-dim mt-1 italic">
+        Starts at <span className="font-mono">{gridStart}</span>
+        {gridStart === nowKey && ' (the current month) — earlier production is already booked in the Loans tab'}.
         A Total Lots Cap still applies on top of this schedule (whichever stops first).
-        Months before <span className="font-mono">{nowKey}</span> have already elapsed — they
-        still consume the lot pool, but add no balance to the forecast.
       </div>
     </div>
   )

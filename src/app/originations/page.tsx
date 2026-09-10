@@ -151,8 +151,12 @@ export default function OriginationsPage() {
   const grouped = groupEntries(entries, builders, projects)
   const grand = sumEntries(entries)
 
+  // No max-width: this table carries the most columns in the app (builder,
+  // development, start, stop, per-month, this-month, totals, program, rate)
+  // and was being squeezed into 1227px. Matches the Dashboard and Forecast
+  // tabs, which are also full-bleed.
   return (
-    <div className="p-6 space-y-6 max-w-[1227px]">
+    <div className="p-6 space-y-6">
       <div className="flex items-center justify-between fade-up fade-up-1">
         <div>
           <h1 className="text-lg font-medium text-fg-strong flex items-center gap-2">

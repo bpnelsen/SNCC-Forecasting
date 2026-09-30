@@ -472,3 +472,153 @@ describe('effectiveDraw', () => {
     expect(eff.rawPct).toBeCloseTo(1.4, 6)
   })
 })
+
+// ─── New Originations actually drive balances off the program draw curve ─────
+
+describe('new originations draw against their loan program curve', () => {
+  // A deliberately lumpy curve so the monthly series is a recognisable
+  // fingerprint of the curve rather than a plausible-looking ramp.
+  const LUMPY: number[] = [0.25, 0.50, 0.25]
+
+  const program = (over: Partial<LoanProgram> = {}): LoanProgram => ({
+    ...SF_PROGRAM, draw_curve: LUMPY, default_term_months: 6, ...over,
+  })
+
+  // One cohort of 10 loans × $100k, originated in month 0 and then stopped,
+  // so the whole series comes from a single cohort ageing through the curve.
+  const oneCohort = (over: Partial<NewOriginationEntry> = {}) => origination({
+    loan_count: 10,
+    avg_loan_amount: 100_000,
+    total_lots: 10,
+    end_month: monthKey(0),
+    ...over,
+  })
+
+  it('reproduces the curve month by month, then drops at the term', () => {
+    const result = runForecast(baseInput({
+      loanPrograms: [program()],
+      newOriginations: [oneCohort()],
+      settings: { ...SETTINGS, horizon_months: 8 },
+    }))
+    const series = result.months.map(m => Math.round(m.forecasted_sfr))
+
+    // cumulativeDraw is the running sum of the curve, clamped at 1, and the
+    // cohort holds that balance until age === default_term_months (6).
+    expect(series).toEqual([
+      250_000,    // age 0 → 0.25
+      750_000,    // age 1 → 0.75
+      1_000_000,  // age 2 → 1.00 (curve exhausted)
+      1_000_000,  // age 3 → holds
+      1_000_000,  // age 4
+      1_000_000,  // age 5
+      0,          // age 6 → term reached, balance zeroed
+      0,
+    ])
+  })
+
+  it('follows the curve it is given — a different curve moves the numbers', () => {
+    const front = runForecast(baseInput({
+      loanPrograms: [program({ draw_curve: [1] })],
+      newOriginations: [oneCohort()],
+      settings: { ...SETTINGS, horizon_months: 3 },
+    })).months.map(m => Math.round(m.forecasted_sfr))
+
+    const back = runForecast(baseInput({
+      loanPrograms: [program({ draw_curve: [0, 0, 1] })],
+      newOriginations: [oneCohort()],
+      settings: { ...SETTINGS, horizon_months: 3 },
+    })).months.map(m => Math.round(m.forecasted_sfr))
+
+    expect(front).toEqual([1_000_000, 1_000_000, 1_000_000])
+    expect(back).toEqual([0, 0, 1_000_000])
+  })
+
+  it('falls back to the builder default program when the entry names none', () => {
+    // The entry points at no program; the builder points at 'prog-alt'. If
+    // resolution were broken this would silently use the SF fallback instead,
+    // which has a different curve.
+    const alt = program({ id: 'prog-alt', name: 'Alt', draw_curve: [0, 1] })
+    const result = runForecast(baseInput({
+      loanPrograms: [program({ draw_curve: [1] }), alt],
+      builders: [{ ...BUILDER, default_loan_program_id: 'prog-alt' }],
+      newOriginations: [oneCohort({ loan_program_id: null })],
+      settings: { ...SETTINGS, horizon_months: 2 },
+    }))
+    expect(result.months.map(m => Math.round(m.forecasted_sfr))).toEqual([0, 1_000_000])
+  })
+
+  it('honours an explicit program over the builder default', () => {
+    const alt = program({ id: 'prog-alt', name: 'Alt', draw_curve: [0, 1] })
+    const result = runForecast(baseInput({
+      loanPrograms: [program({ draw_curve: [1] }), alt],
+      builders: [{ ...BUILDER, default_loan_program_id: 'prog-alt' }],
+      newOriginations: [oneCohort({ loan_program_id: 'prog-sf' })],
+      settings: { ...SETTINGS, horizon_months: 2 },
+    }))
+    expect(result.months.map(m => Math.round(m.forecasted_sfr))).toEqual([1_000_000, 1_000_000])
+  })
+
+  it('scales with loan count and avg amount, not just with the curve', () => {
+    const result = runForecast(baseInput({
+      loanPrograms: [program({ draw_curve: [0.5] })],
+      newOriginations: [oneCohort({
+        loan_count: 3, total_lots: 3, avg_loan_amount: 250_000,
+      })],
+      settings: { ...SETTINGS, horizon_months: 1 },
+    }))
+    // 3 × $250k × 0.5 = $375k
+    expect(Math.round(result.months[0].forecasted_sfr)).toBe(375_000)
+  })
+
+  it('applies the curve to each monthly cohort separately when recurring', () => {
+    // 2 loans/month for 3 months on a front-loaded 2-month curve. Each cohort
+    // ages independently, so month 2 carries cohort 0 at full draw plus
+    // cohort 1 at full draw plus cohort 2 at its first month.
+    const result = runForecast(baseInput({
+      loanPrograms: [program({ draw_curve: [0.5, 0.5], default_term_months: 12 })],
+      newOriginations: [origination({
+        loan_count: 2, avg_loan_amount: 100_000,
+        total_lots: 6, end_month: monthKey(2),
+      })],
+      settings: { ...SETTINGS, horizon_months: 3 },
+    }))
+    const series = result.months.map(m => Math.round(m.forecasted_sfr))
+    // cohort balances (2 × $100k = $200k commitment each):
+    //  m0: c0@0.5                      = 100k
+    //  m1: c0@1.0 + c1@0.5             = 200k + 100k = 300k
+    //  m2: c0@1.0 + c1@1.0 + c2@0.5    = 200k + 200k + 100k = 500k
+    expect(series).toEqual([100_000, 300_000, 500_000])
+  })
+})
+
+describe('New Originations tab totals vs forecast balances', () => {
+  it('tab Total ($) is commitment; the forecast is commitment × effective draw', () => {
+    // The tab's Total ($) column is count × avg_loan_amount — what the loans
+    // are committed for. It deliberately does not apply the draw curve, so it
+    // will not tie to the forecast whenever a curve draws to less than 100%.
+    // This pins the relationship so neither side is "fixed" in isolation.
+    const curve = Array(12).fill(0.05)           // 12 months, sums to 0.60
+    const program: LoanProgram = {
+      ...SF_PROGRAM, draw_curve: curve, default_term_months: 12,
+    }
+    const entry = origination({
+      loan_count: 40, avg_loan_amount: 350_000,
+      total_lots: 40, end_month: monthKey(0),    // one cohort, all in month 0
+    })
+
+    const commitment = 40 * 350_000              // what the tab shows: $14.0M
+    const eff = effectiveDraw(program)
+    expect(eff.pct).toBeCloseTo(0.60, 6)
+
+    const result = runForecast(baseInput({
+      loanPrograms: [program],
+      newOriginations: [entry],
+      settings: { ...SETTINGS, horizon_months: 12 },
+    }))
+    const peak = Math.max(...result.months.map(m => m.forecasted_sfr))
+
+    expect(commitment).toBe(14_000_000)
+    expect(Math.round(peak)).toBe(8_400_000)     // 14.0M × 0.60
+    expect(peak).toBeCloseTo(commitment * eff.pct, 0)
+  })
+})

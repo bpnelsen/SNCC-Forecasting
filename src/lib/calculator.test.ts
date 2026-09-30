@@ -622,3 +622,82 @@ describe('New Originations tab totals vs forecast balances', () => {
     expect(peak).toBeCloseTo(commitment * eff.pct, 0)
   })
 })
+
+// ─── Dashboard: tile vs Total Outstanding (Loans) ────────────────────────────
+
+describe('Active Loan (Outstanding) tile vs Total Outstanding (Loans) row', () => {
+  // A plain SFR loan, funded, not matured, disbursed < committed.
+  const existingLoan = (over: Partial<Loan> = {}): Loan => ({
+    borrower: 'Acme Homes',
+    loan_number: 'L-1',
+    loan_program: 'SFR Construction',
+    original_loan_amount: 300_000,
+    loan_funded_date: `${monthKey(-3)}-01`,
+    current_loan_due_date: `${monthKey(18)}-01`,
+    current_loan_amount: 300_000,
+    loan_amount_disbursed: 200_000,
+    loan_amount_remaining: 100_000,
+    interest_reserve_balance: 0,
+    current_interest_rate: 0.06,
+    interest_accrued_mtd: 0,
+    project_name: null,
+    unit_name: null,
+    development_name: null,
+    subdivision_name: null,
+    projected_balance: 200_000,
+    loan_type: 'SFR',
+    number_of_lots: 1,
+    release_period_months: 12,
+    ...over,
+  })
+
+  it('differs by exactly the forecast layer — the tile excludes it', () => {
+    // The tile is imported loans' disbursed balance. The row adds the
+    // new-origination cohorts and planned A&D for that month. They are
+    // different quantities, so the row being larger is expected, not a bug.
+    const result = runForecast(baseInput({
+      loans: [existingLoan(), existingLoan({ loan_number: 'L-2' })],
+      loanPrograms: [{ ...SF_PROGRAM, draw_curve: [1], default_term_months: 24 }],
+      newOriginations: [origination({
+        loan_count: 4, avg_loan_amount: 250_000,
+        total_lots: 4, end_month: monthKey(0),
+      })],
+      settings: { ...SETTINGS, horizon_months: 3 },
+    }))
+
+    const m0 = result.months[0]
+    const tile = (['sfr', 'mfr', 'and', 'raw_land', 'finished_lots'] as const)
+      .reduce((s, k) => s + result.active_loans_outstanding[k], 0)
+    const activeOnly =
+      m0.active_sfr + m0.active_mfr + m0.active_and +
+      m0.active_raw_land + m0.active_finished_lots
+    const forecastLayer =
+      m0.forecasted_sfr + m0.forecasted_mfr + m0.forecasted_and + m0.a_and_d_planned
+    const rowTotal = activeOnly + forecastLayer
+
+    // Tile: 2 × $200k disbursed.
+    expect(tile).toBe(400_000)
+    // Forecast layer: 4 × $250k at a full first-month draw.
+    expect(Math.round(forecastLayer)).toBe(1_000_000)
+    // The row exceeds the tile by the forecast layer, and by nothing else
+    // once the documented FL-basis and matured-loan deltas are zero.
+    expect(result.reconciliation.fl_basis_delta).toBe(0)
+    expect(result.reconciliation.matured_disbursed).toBe(0)
+    expect(Math.round(rowTotal - tile)).toBe(Math.round(forecastLayer))
+    expect(Math.round(rowTotal)).toBe(1_400_000)
+  })
+
+  it('keeps a matured loan on the books at month 0, then drops it', () => {
+    // Month 0 deliberately has no maturity gate, so the Active rows tie to
+    // the tile. The gate starts at month 1, which is what gives the segment
+    // rows their month-over-month decay.
+    const result = runForecast(baseInput({
+      loans: [existingLoan({ current_loan_due_date: `${monthKey(-2)}-01` })],
+      settings: { ...SETTINGS, horizon_months: 3 },
+    }))
+    expect(result.active_loans_outstanding.sfr).toBe(200_000)
+    expect(result.months[0].active_sfr).toBe(200_000)
+    expect(result.months[1].active_sfr).toBe(0)
+    expect(result.months[2].active_sfr).toBe(0)
+  })
+})

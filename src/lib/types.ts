@@ -254,10 +254,12 @@ export interface ForecastResult {
     // Forecasted SFR/MFR is scaled by this.
     month_zero_fraction: number
     // Σ loan_amount_disbursed across imported loans whose maturity date is
-    // strictly before the as_of_date. These contribute to the Active Loan
-    // (Outstanding) tile (sumDisbursed has no maturity gate) but NOT to
-    // m.active_<seg> at month 0 (projectExistingLoanOutstanding zeroes
-    // matured loans). That delta explains "why tile > Monthly Summary".
+    // strictly before the as_of_date. Reported for traceability only: since
+    // the "matured loans stay on the books" change, month 0 has no maturity
+    // gate (projectExistingLoanOutstanding), so these contribute to BOTH the
+    // Active Loan (Outstanding) tile and m.active_<seg> at month 0 and are
+    // not a source of divergence between them. The gate starts at month 1,
+    // which is why the segment rows decay from there.
     matured_disbursed: number
     // Δ between sumExistingOut(FL loans) at month 0 and sumDisbursed(FL).
     // FL loans where current_loan_amount > loan_amount_disbursed start the

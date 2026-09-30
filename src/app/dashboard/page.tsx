@@ -10,6 +10,9 @@ import { RefreshCw, AlertCircle, Filter, MessageSquare } from 'lucide-react'
 import Link from 'next/link'
 import { ParentCompanyDropdown } from '@/components/ui/ParentCompanyDropdown'
 import { UNASSIGNED_PARENT_KEY } from '@/lib/calculator'
+import {
+  type FilterKey, type FilterChip, CHIPS, ALL_KEYS, applyFilter,
+} from '@/lib/dashboard-filter'
 
 // Render the active version's as_of_date (YYYY-MM-DD from the engine) as
 // "May 14, 2026". Parsed manually so timezone shifts can't bump it by a day.
@@ -24,153 +27,6 @@ function formatAsOf(iso: string | null | undefined): string {
   return `${months[mi]} ${Number(d)}, ${y}`
 }
 
-// The set of toggleable product/category buckets shown in the dashboard.
-// Land Bucket isn't a "product type" per se but it sits next to the loan
-// segments in every chart, so it lives in the same filter strip.
-type FilterKey = 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh' | 'land_bucket'
-
-interface FilterChip {
-  key: FilterKey
-  label: string
-  color: string
-}
-
-const CHIPS: FilterChip[] = [
-  { key: 'sfr',           label: 'SFR',           color: '#58A6FF' },
-  { key: 'mfr',           label: 'MFR',           color: '#D4A853' },
-  { key: 'and',           label: 'A&D',           color: '#3FB950' },
-  { key: 'raw_land',      label: 'Raw Land',      color: '#8B949E' },
-  { key: 'finished_lots', label: 'Finished Lots', color: '#A371F7' },
-  { key: 'hhh',           label: 'HHH/JV',        color: '#F85149' },
-  { key: 'land_bucket',   label: 'Land Bucket',   color: '#79C0FF' },
-]
-
-const ALL_KEYS = new Set<FilterKey>(CHIPS.map(c => c.key))
-
-// Slice a single segment by the active chip + selected parents. When the
-// parent filter is on, both the existing (imported by borrower→parent) and
-// the builder-attributed (forecasted cohorts + HHH/JV + A&D planned)
-// portions come from m.by_parent so every contribution honors the same
-// selection. The non-filtered branch reads m.<seg> / m.outstanding_<seg>
-// directly — those already fold in HHH/JV and A&D planned at the engine
-// level, so leaving them as-is keeps unfiltered numbers identical.
-type SegKey = 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh'
-function sliceSegment(
-  m: MonthlyBalance,
-  seg: SegKey,
-  selectedParents: Set<string> | null,
-): { existing: number; forecasted: number; outstanding: number; active: number; a_and_d_planned: number } {
-  // hhh has no engine-exposed active_<seg> (no imported HHH loans post
-  // migration 017); active stays 0 for the hhh slot.
-  // a_and_d_planned is only meaningful on seg === 'and' — 0 elsewhere.
-  if (selectedParents === null) {
-    const fcst = m[`forecasted_${seg}` as const]
-    const active = seg === 'hhh' ? 0 : m[`active_${seg}` as const]
-    return {
-      existing:    m[seg] - fcst,
-      forecasted:  fcst,
-      outstanding: m[`outstanding_${seg}` as const],
-      active,
-      a_and_d_planned: seg === 'and' ? m.a_and_d_planned : 0,
-    }
-  }
-  let existing = 0, forecasted = 0, outstanding = 0, active = 0, a_and_d_planned = 0
-  for (const pid of selectedParents) {
-    const slot = m.by_parent[pid]
-    if (!slot) continue
-    existing    += slot[seg]
-    forecasted  += slot[`forecasted_${seg}` as const]
-    outstanding += slot[`outstanding_${seg}` as const]
-    if (seg !== 'hhh') active += slot[`active_${seg}` as const]
-    // hhh segment also carries HHH/JV project balances; the engine adds these
-    // into m.<seg> and m.outstanding_<seg> globally — the per-parent slice
-    // has to do the same so totals are consistent across filter states.
-    if (seg === 'hhh') forecasted += slot.hhh_jv_balance
-    // a_and_d_planned is returned as its own slot now (no longer folded into
-    // `forecasted`) so the Monthly Summary's Forecasted A&D row can show
-    // (scheduled A&D cohorts) + (planned A&D) cleanly without double-count.
-    if (seg === 'and') a_and_d_planned += slot.a_and_d_planned
-  }
-  return { existing, forecasted, outstanding, active, a_and_d_planned }
-}
-
-// Land Bucket honors the same parent selection now that builders carry a
-// parent_company_id (migration 013).
-function sliceLandBucket(m: MonthlyBalance, selectedParents: Set<string> | null): number {
-  if (selectedParents === null) return m.land_bucket
-  let total = 0
-  for (const pid of selectedParents) total += m.by_parent[pid]?.land_bucket ?? 0
-  return total
-}
-
-// Zero out segments not in `active`, then recompute total_loans, total_all,
-// and variance month-over-month. When `selectedParents` is non-null both
-// existing AND builder-attributed portions of each segment come from the
-// per-parent aggregates so Land Bucket + forecasted + HHH/JV + A&D planned
-// all honor the parent filter.
-function applyFilter(
-  months: MonthlyBalance[],
-  active: Set<FilterKey>,
-  selectedParents: Set<string> | null,
-): MonthlyBalance[] {
-  let prev = 0
-  return months.map((m, i) => {
-    const slice = (seg: SegKey, chip: FilterKey) => {
-      if (!active.has(chip)) return { combined: 0, fcst: 0, outstanding: 0, active: 0, a_and_d_planned: 0 }
-      const { existing, forecasted, outstanding, active: act, a_and_d_planned } = sliceSegment(m, seg, selectedParents)
-      // combined still includes planned A&D so the segment total stays
-      // consistent with the engine's m.and (which folds in aAndDPlanned).
-      // forecasted_and stays scheduled-only — Forecasted A&D row on the
-      // Monthly Summary adds the two cleanly.
-      return { combined: existing + forecasted + a_and_d_planned, fcst: forecasted, outstanding, active: act, a_and_d_planned }
-    }
-
-    const sSfr = slice('sfr',           'sfr')
-    const sMfr = slice('mfr',           'mfr')
-    const sAnd = slice('and',           'and')
-    const sRaw = slice('raw_land',      'raw_land')
-    const sFin = slice('finished_lots', 'finished_lots')
-    const sHhh = slice('hhh',           'hhh')
-    const lb   = active.has('land_bucket') ? sliceLandBucket(m, selectedParents) : 0
-
-    const filtered: MonthlyBalance = {
-      ...m,
-      sfr:           sSfr.combined,
-      mfr:           sMfr.combined,
-      and:           sAnd.combined,
-      raw_land:      sRaw.combined,
-      finished_lots: sFin.combined,
-      hhh:           sHhh.combined,
-      land_bucket:   lb,
-      forecasted_sfr: sSfr.fcst,
-      forecasted_mfr: sMfr.fcst,
-      outstanding_sfr:           sSfr.outstanding,
-      outstanding_mfr:           sMfr.outstanding,
-      outstanding_and:           sAnd.outstanding,
-      outstanding_raw_land:      sRaw.outstanding,
-      outstanding_finished_lots: sFin.outstanding,
-      outstanding_hhh:           sHhh.outstanding,
-      active_sfr:           sSfr.active,
-      active_mfr:           sMfr.active,
-      active_and:           sAnd.active,
-      active_raw_land:      sRaw.active,
-      active_finished_lots: sFin.active,
-      // Propagate the per-parent planned A&D contribution onto the filtered
-      // MonthlyBalance so the Forecasted A&D row reads it directly.
-      a_and_d_planned:      sAnd.a_and_d_planned,
-      total_loans: 0,
-      total_all:   0,
-      variance:    0,
-    }
-    filtered.total_loans =
-      filtered.sfr + filtered.mfr + filtered.and +
-      filtered.raw_land + filtered.finished_lots + filtered.hhh
-    filtered.total_all = filtered.total_loans + filtered.land_bucket
-    filtered.variance = i === 0 ? 0 : filtered.total_all - prev
-    prev = filtered.total_all
-    return filtered
-  })
-}
 
 export default function DashboardPage() {
   const [data, setData]       = useState<ForecastResult | null>(null)
@@ -532,6 +388,24 @@ function ReconciliationPanel({ months, outstandingTile, reconciliation }: Reconc
   const fmt = (n: number) => formatCurrency(n, true)
 
   const rows: Row[] = [
+    {
+      // The comparison people actually make: the row in the Monthly Summary
+      // against the tile at the top of the page. Their names are nearly
+      // identical and the quantities are not, so state the decomposition
+      // outright rather than leaving the gap to be puzzled over.
+      name: 'Total Outstanding (Loans) − Active Loan (Outstanding) tile',
+      ok: Math.abs(unexplained) < 1,
+      lhs: loansSum,
+      rhs: outstandingTile,
+      note:
+        `Expected gap ${fmt(loansSum - outstandingTile)} = forecast layer `
+        + `${fmt(m0.forecasted_sfr + m0.forecasted_mfr + fcstAnd0)} `
+        + `(Forecasted SFR ${fmt(m0.forecasted_sfr)} + MFR ${fmt(m0.forecasted_mfr)} + A&D ${fmt(fcstAnd0)})`
+        + ` + FL basis Δ ${fmt(reconciliation.fl_basis_delta)}`
+        + (Math.abs(unexplained) < 1
+          ? '. The tile is imported loans at disbursed only — it carries no forecast.'
+          : `. UNEXPLAINED ${fmt(unexplained)} — the gap is not fully accounted for.`),
+    },
     {
       name: 'Total Outstanding (Loans) ≡ Σ visible loan rows',
       ok: true,

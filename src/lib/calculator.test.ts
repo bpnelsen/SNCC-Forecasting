@@ -215,6 +215,13 @@ describe('new originations with a start month before the horizon', () => {
 // ─── Regression: A&D loans originated before the horizon ─────────────────────
 
 describe('A&D loan originated before the forecast window', () => {
+  // The catch-up still drives the A&D tab's own projection of the loan, so it
+  // is asserted on the loan's schedule. What changed is that such a loan no
+  // longer adds to the forecast TOTAL: it should already be in the imported
+  // loan report, and adding it again double-counted it.
+  const m0 = (r: ReturnType<typeof runForecast>) =>
+    r.a_and_d_schedules[0].months[0].starting_balance
+
   it('does not restart its draw ramp at month 0', () => {
     const past = aAndDLoan({ origination_date: `${monthKey(-8)}-01` })
     const fresh = aAndDLoan({ origination_date: `${monthKey(0)}-01` })
@@ -224,8 +231,8 @@ describe('A&D loan originated before the forecast window', () => {
 
     // A loan opened 8 months ago has drawn 8 of its 10 draw months, so its
     // month-0 balance must be well above a brand-new loan's initial balance.
-    expect(pastResult.months[0].and).toBeGreaterThan(freshResult.months[0].and)
-    expect(freshResult.months[0].and).toBeCloseTo(1_000_000, 0)
+    expect(m0(pastResult)).toBeGreaterThan(m0(freshResult))
+    expect(m0(freshResult)).toBeCloseTo(1_000_000, 0)
   })
 
   it('catches up to roughly the right point on the draw ramp', () => {
@@ -235,7 +242,7 @@ describe('A&D loan originated before the forecast window', () => {
       aAndDLoans: [aAndDLoan({ origination_date: `${monthKey(-8)}-01` })],
     }))
 
-    expect(result.months[0].and).toBeCloseTo(7_400_000, 0)
+    expect(m0(result)).toBeCloseTo(7_400_000, 0)
   })
 
   it('caps the caught-up balance at peak', () => {
@@ -244,8 +251,8 @@ describe('A&D loan originated before the forecast window', () => {
       aAndDLoans: [aAndDLoan({ origination_date: `${monthKey(-40)}-01` })],
     }))
 
-    expect(result.months[0].and).toBeLessThanOrEqual(9_000_000)
-    expect(result.months[0].and).toBeCloseTo(9_000_000, 0)
+    expect(m0(result)).toBeLessThanOrEqual(9_000_000)
+    expect(m0(result)).toBeCloseTo(9_000_000, 0)
   })
 
   it('replays lot releases that happened before the horizon', () => {
@@ -261,7 +268,16 @@ describe('A&D loan originated before the forecast window', () => {
       aAndDLoans: [aAndDLoan({ origination_date: `${monthKey(-12)}-01` })],
     }))
 
-    expect(withReleases.months[0].and).toBeLessThan(withoutReleases.months[0].and)
+    expect(m0(withReleases)).toBeLessThan(m0(withoutReleases))
+  })
+
+  it('is kept out of the forecast total, since it is already on the books', () => {
+    const result = runForecast(baseInput({
+      aAndDLoans: [aAndDLoan({ origination_date: `${monthKey(-8)}-01` })],
+    }))
+    expect(result.a_and_d_schedules[0].forecast_scale).toBe(0)
+    expect(result.months.every(m => m.a_and_d_planned === 0)).toBe(true)
+    expect(result.months.every(m => m.and === 0)).toBe(true)
   })
 })
 
@@ -699,5 +715,102 @@ describe('Active Loan (Outstanding) tile vs Total Outstanding (Loans) row', () =
     expect(result.months[0].active_sfr).toBe(200_000)
     expect(result.months[1].active_sfr).toBe(0)
     expect(result.months[2].active_sfr).toBe(0)
+  })
+})
+
+// ─── This month's anticipated originations are prorated by today ─────────────
+
+describe('current-month originations prorate by today, in every month', () => {
+  // The user's rule: $10M anticipated for September. On the 15th half has
+  // funded and is on the books, so the forecast carries half; on the last day
+  // it carries nothing, and September ties to the Active Loan (Outstanding) tile.
+  const now = startOfMonth(new Date())
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+  const dayKey = (d: number) => `${monthKey(0)}-${String(d).padStart(2, '0')}`
+
+  const FULL_DRAW: LoanProgram = { ...SF_PROGRAM, draw_curve: [1], default_term_months: 24 }
+
+  // $10M anticipated: 10 loans × $1M, all in the current month.
+  const tenMillionThisMonth = origination({
+    loan_count: 10, avg_loan_amount: 1_000_000,
+    total_lots: 10, end_month: monthKey(0),
+  })
+
+  const run = (today: string, over: Partial<ForecastInput> = {}) => runForecast(baseInput({
+    loanPrograms: [FULL_DRAW],
+    newOriginations: [tenMillionThisMonth],
+    settings: { ...SETTINGS, horizon_months: 3 },
+    today,
+    ...over,
+  }))
+
+  it('carries the unelapsed share on the 15th — this month and after', () => {
+    const r = run(dayKey(15))
+    const expected = 10_000_000 * (daysInMonth - 15) / daysInMonth
+    expect(r.months[0].forecasted_sfr).toBeCloseTo(expected, 0)
+    // Not back to 100% next month: the funded half is in the loan report for
+    // the rest of its life, so restoring it here would count it twice.
+    expect(r.months[1].forecasted_sfr).toBeCloseTo(expected, 0)
+    expect(r.months[2].forecasted_sfr).toBeCloseTo(expected, 0)
+  })
+
+  it('carries nothing on the last day of the month', () => {
+    const r = run(dayKey(daysInMonth))
+    expect(r.months.every(m => m.forecasted_sfr === 0)).toBe(true)
+  })
+
+  it('ties September Total Outstanding (Loans) to the tile on the last day', () => {
+    const booked: Loan = {
+      borrower: 'Acme Homes', loan_number: 'L-1', loan_program: 'SFR Construction',
+      original_loan_amount: 5_000_000, loan_funded_date: `${monthKey(-2)}-01`,
+      current_loan_due_date: `${monthKey(12)}-01`, current_loan_amount: 5_000_000,
+      loan_amount_disbursed: 4_000_000, loan_amount_remaining: 1_000_000,
+      interest_reserve_balance: 0, current_interest_rate: 0.06, interest_accrued_mtd: 0,
+      project_name: null, unit_name: null, development_name: null, subdivision_name: null,
+      projected_balance: 4_000_000, loan_type: 'SFR', number_of_lots: 1, release_period_months: 12,
+    }
+    const r = run(dayKey(daysInMonth), { loans: [booked] })
+    const m = r.months[0]
+    const tile = (['sfr', 'mfr', 'and', 'raw_land', 'finished_lots'] as const)
+      .reduce((s, k) => s + r.active_loans_outstanding[k], 0)
+    const row =
+      m.active_sfr + m.active_mfr + m.active_and + m.active_raw_land + m.active_finished_lots +
+      m.forecasted_sfr + m.forecasted_mfr + m.forecasted_and + m.a_and_d_planned
+    expect(tile).toBe(4_000_000)
+    expect(row).toBe(tile)
+  })
+
+  it('adds a cohort starting next month in full', () => {
+    const r = run(dayKey(daysInMonth), {
+      newOriginations: [origination({
+        month: monthKey(1), loan_count: 10, avg_loan_amount: 1_000_000,
+        total_lots: 10, end_month: monthKey(1),
+      })],
+    })
+    expect(r.months[0].forecasted_sfr).toBe(0)
+    expect(r.months[1].forecasted_sfr).toBe(10_000_000)
+  })
+
+  it('prorates A&D cohorts the same way, not just SFR and MFR', () => {
+    const AD: LoanProgram = { ...FULL_DRAW, id: 'prog-ad', name: 'A&D', product_type: 'AD' }
+    const r = run(dayKey(15), {
+      loanPrograms: [AD],
+      newOriginations: [{ ...tenMillionThisMonth, loan_program_id: 'prog-ad' }],
+    })
+    const expected = 10_000_000 * (daysInMonth - 15) / daysInMonth
+    expect(r.months[0].forecasted_and).toBeCloseTo(expected, 0)
+    expect(r.months[1].forecasted_and).toBeCloseTo(expected, 0)
+  })
+
+  it('prorates an A&D tab loan originating this month, and drops one from earlier', () => {
+    const thisMonth = aAndDLoan({ id: 'a1', origination_date: dayKey(1) })
+    const earlier   = aAndDLoan({ id: 'a2', origination_date: `${monthKey(-3)}-01` })
+    const r = run(dayKey(15), { newOriginations: [], aAndDLoans: [thisMonth, earlier] })
+    const frac = (daysInMonth - 15) / daysInMonth
+    const [s1, s2] = r.a_and_d_schedules
+    expect(s1.forecast_scale).toBeCloseTo(frac, 10)
+    expect(s2.forecast_scale).toBe(0)
+    // Only the this-month loan contributes, at its unelapsed share.
+    expect(r.months[0].a_and_d_planned).toBeCloseTo(s1.months[0].starting_balance * frac, 0)
   })
 })

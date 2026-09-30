@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { format } from 'date-fns'
 import { createServiceClient } from '@/lib/supabase'
 import { runForecast } from '@/lib/calculator'
 import { fetchAll } from '@/lib/fetch-all'
@@ -139,6 +140,13 @@ export async function GET() {
       asOfDate:            version.as_of_date
                              || (version.created_at ? String(version.created_at).slice(0, 10)
                                                     : new Date().toISOString().split('T')[0]),
+      // Today, in the same clock the engine uses for the horizon start
+      // (startOfMonth(new Date())), so the two can never disagree about which
+      // month is current. Drives how much of this month's anticipated
+      // originations the forecast still carries: half on the 15th, none on
+      // the last day. Deliberately separate from asOfDate above, which must
+      // not drift with the calendar.
+      today:               format(new Date(), 'yyyy-MM-dd'),
     })
 
     return NextResponse.json(result)

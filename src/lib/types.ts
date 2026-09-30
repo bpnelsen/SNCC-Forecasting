@@ -249,10 +249,15 @@ export interface ForecastResult {
   // Diagnostic fields surfaced for the dashboard's Reconciliation panel.
   // Lets the UI explain why some identities may not balance to the cent.
   reconciliation: {
-    // Fraction of the current calendar month still ahead of as_of_date
-    // (Truth 4). 0.5 means import was at the half-way point. month-0
-    // Forecasted SFR/MFR is scaled by this.
+    // Share of the current calendar month still ahead of `proration_anchor`
+    // (today). 0.5 on the 15th of a 30-day month, 0 on the last day. Every
+    // forecast source originating this month — SFR, MFR and A&D cohorts and
+    // A&D tab loans — is scaled by this in every month of its life, because
+    // the elapsed share has funded and is in the imported loan report.
     month_zero_fraction: number
+    // The date month_zero_fraction was measured from (YYYY-MM-DD): today, or
+    // the loan report's as_of_date for callers that don't pass one.
+    proration_anchor: string
     // Σ loan_amount_disbursed across imported loans whose maturity date is
     // strictly before the as_of_date. Reported for traceability only: since
     // the "matured loans stay on the books" change, month 0 has no maturity
@@ -491,6 +496,11 @@ export interface AAndDLoanSchedule {
   imported_borrower?: string | null
   imported_maturity_date?: string | null
   imported_current_loan_amount?: number
+  // Planned loans only: the share of this loan the forecast carries. 0 when its
+  // origination date is before the current month (it should already be in the
+  // imported loan report), the unelapsed share of the month when it originates
+  // this month, 1 otherwise. The schedule itself is always the full projection.
+  forecast_scale?: number
 }
 
 export interface NewOriginationEntry {  id: string

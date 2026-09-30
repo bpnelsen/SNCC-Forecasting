@@ -350,6 +350,7 @@ export default function DashboardPage() {
         months={months}
         outstandingTile={outstanding}
         reconciliation={data.reconciliation}
+        asOfDate={data.as_of_date}
       />
     </div>
   )
@@ -359,12 +360,13 @@ interface ReconciliationPanelProps {
   months: MonthlyBalance[]
   outstandingTile: number
   reconciliation: ForecastResult['reconciliation']
+  asOfDate: string | null | undefined
 }
 
 // Diagnostic surface for "Truth 5" — shows each expected identity between
 // the Monthly Summary Table's month-0 column and the tiles / Current
 // Breakdown, with the delta and the structural reason when they differ.
-function ReconciliationPanel({ months, outstandingTile, reconciliation }: ReconciliationPanelProps) {
+function ReconciliationPanel({ months, outstandingTile, reconciliation, asOfDate }: ReconciliationPanelProps) {
   if (months.length === 0) return null
   const m0 = months[0]
   const fcstAnd0 = m0.forecasted_and + m0.a_and_d_planned
@@ -433,13 +435,17 @@ function ReconciliationPanel({ months, outstandingTile, reconciliation }: Reconc
 
   const fraction = reconciliation.month_zero_fraction
   const fracPct = (fraction * 100).toFixed(1)
+  const anchor = reconciliation.proration_anchor
+  // Proration treats everything up to today as funded and on the books. That
+  // only holds if the loan report is current; YYYY-MM-DD compares by string.
+  const reportLags = !!asOfDate && !!anchor && asOfDate.slice(0, 10) < anchor.slice(0, 10)
 
   return (
     <div className="card fade-up fade-up-5">
       <div className="card-header">
         <span className="card-title">Reconciliation · month 0</span>
         <span className="text-[10px] text-fg-dim">
-          import covers {fracPct}% of {m0.label} ahead
+          {fracPct}% of {m0.label} still ahead
         </span>
       </div>
       <div className="p-4 space-y-2 text-[11px]">
@@ -458,10 +464,20 @@ function ReconciliationPanel({ months, outstandingTile, reconciliation }: Reconc
           </div>
         ))}
         <div className="pt-2 mt-2 border-t border-border text-[10px] text-fg-dim italic">
-          <strong>Forecasted SFR / MFR proration:</strong> {fracPct}% of the current month is ahead of the import date,
-          so month-0 SF/MF scheduled cohorts contribute (1st-month draw × {fracPct}%) instead of the full first-month draw.
-          Subsequent months use the full draw curve. (Truth 4)
+          <strong>This month&rsquo;s anticipated originations:</strong> as of {formatAsOf(anchor)}, {fracPct}% of
+          {' '}{m0.label} is still ahead, so the forecast carries {fracPct}% of every SFR, MFR and A&amp;D
+          cohort and A&amp;D tab loan starting this month — in this month and every month after. The rest has
+          funded and is in the loan report, so carrying it again would count it twice. Loans starting before
+          this month are carried at 0% for the same reason.
         </div>
+        {reportLags && (
+          <div className="pt-2 text-[10px] text-danger">
+            <strong>The loan report is as of {formatAsOf(asOfDate)}</strong>, earlier than today
+            ({formatAsOf(anchor)}). Anything that funded in between counts as received here, but isn&rsquo;t
+            in the report yet — so it&rsquo;s in neither the actuals nor the forecast. Import a current report
+            to bring it in.
+          </div>
+        )}
       </div>
     </div>
   )
@@ -498,8 +514,8 @@ function SummaryTable({ months }: { months: MonthlyBalance[] }) {
     { label: 'Forecasted SFR',  values: months.map(m => m.forecasted_sfr),         kind: 'currency', emphasis: 'forecast' },
     { label: 'Forecasted MFR',  values: months.map(m => m.forecasted_mfr),         kind: 'currency', emphasis: 'forecast' },
     // Forecasted A&D = scheduled A&D cohorts (drawn) + planned A&D loans'
-    // contribution from /a-and-d this month. No Truth-4 month-0 proration
-    // (that rule is SFR/MFR only).
+    // contribution from /a-and-d this month. Both are prorated by today like
+    // SFR and MFR; see lotOriginationBalance in calculator.ts.
     { label: 'Forecasted A&D',  values: months.map(fcstAnd),                       kind: 'currency', emphasis: 'forecast' },
     // HHH/JV is an equity investment, not a loan. Sourced from the manual
     // /hhh-jv tab. Excluded from Total Outstanding (Loans); included in

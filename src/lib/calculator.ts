@@ -514,10 +514,20 @@ function projectAAndDLoan(
 
 // Lot-driven origination cohort balance at month index `m`.
 //
-// monthZeroFraction (default 1) prorates the month-0 contribution of SF/MF
-// cohorts originating in month 0 by the % of the current month still ahead
-// of the import date. Dashboard tile "Forecasted SFR/MFR" shows the
-// post-import portion of month 0 — per Truth 4 spec.
+// A cohort that originates in month 0 is scaled by monthZeroFraction — the
+// share of the current month still ahead of today — in EVERY month of its
+// life, and for every product type.
+//
+// The rule: anything that should have originated by today is already in the
+// imported loan report, so the forecast carries only what is still to come.
+// With $10M anticipated for September, on Sep 15 half has funded and is on the
+// books, so the forecast carries $5M; on Sep 30 it carries $0 and September's
+// Total Outstanding (Loans) equals the Active Loan (Outstanding) tile.
+//
+// Scaling every month, not just month 0, is what stops the double count. The
+// funded share lives in the loan report for the rest of its life, so a cohort
+// that came back at 100% from month 1 onward counted it a second time from
+// October on. Scaling only SF/MF also left A&D cohorts unprorated.
 function lotOriginationBalance(
   orig: LotOrigination,
   m: number,
@@ -527,25 +537,20 @@ function lotOriginationBalance(
   if (age < 0) return 0
   if (age >= orig.program.default_term_months) return 0
   const base = orig.count * orig.max_amount_per_loan * cumulativeDraw(orig.program.draw_curve, age)
-  if (
-    m === 0 &&
-    orig.origination_month_idx === 0 &&
-    (orig.program.product_type === 'SF' || orig.program.product_type === 'MF')
-  ) {
-    return base * monthZeroFraction
-  }
-  return base
+  return orig.origination_month_idx === 0 ? base * monthZeroFraction : base
 }
 
-// Percent of the current calendar month still ahead of the import date.
-// Jun 15 in a 30-day June → (30 - 15) / 30 = 0.5.
+// Share of the current calendar month still ahead of `anchorDate`.
+// Sep 15 in a 30-day September → (30 - 15) / 30 = 0.5; Sep 30 → 0.
 //
-// Returns 1 if `asOfDate` isn't in the same calendar month as the horizon's
-// month 0 — the partial-month proration only makes sense when month 0 IS
-// the import's month. If you uploaded last month, month 0 here is a fresh
-// future month and gets the full first-month draw.
-function monthZeroFraction(asOfDate: string, monthZeroStart: Date): number {
-  const asOf = parseISO(asOfDate)
+// The anchor is TODAY (ForecastInput.today) — how much of the month has
+// actually elapsed — falling back to the loan report's as_of_date only when no
+// date is supplied, which keeps callers that predate `today` unchanged.
+//
+// Returns 1 if the anchor isn't in the horizon's month 0 (e.g. the horizon
+// starts in a future month, so none of it has elapsed).
+function monthZeroFraction(anchorDate: string, monthZeroStart: Date): number {
+  const asOf = parseISO(anchorDate)
   if (asOf.getFullYear() !== monthZeroStart.getFullYear() ||
       asOf.getMonth() !== monthZeroStart.getMonth()) {
     return 1
@@ -681,6 +686,11 @@ export interface ForecastInput {
   settings: ForecastSettings
   versionLabel: string
   asOfDate: string
+  // Today (YYYY-MM-DD). Anchors how much of the current month has elapsed, and
+  // so how much of this month's anticipated originations is already on the
+  // books. Passed in rather than read from the clock so the engine stays
+  // deterministic; omitted, it falls back to asOfDate.
+  today?: string
 }
 
 export function runForecast(input: ForecastInput): ForecastResult {
@@ -705,10 +715,9 @@ export function runForecast(input: ForecastInput): ForecastResult {
     )
   }
   const months = generateMonths(startDate, horizonMonths)
-  // Fraction of the current calendar month still ahead of the import date
-  // (Truth 4): SF/MF cohorts originating in month 0 are scaled by this so
-  // the Forecasted SFR/MFR rollups show the post-import portion only.
-  const m0Frac = monthZeroFraction(input.asOfDate, months[0].date)
+  // Share of the current month still ahead of TODAY. Every forecast source
+  // that originates in month 0 is scaled by this; see lotOriginationBalance.
+  const m0Frac = monthZeroFraction(input.today ?? input.asOfDate, months[0].date)
 
   const buildersById = new Map(input.builders.map(b => [b.id, b]))
   const programsById = new Map(input.loanPrograms.map(p => [p.id, p]))
@@ -721,13 +730,30 @@ export function runForecast(input: ForecastInput): ForecastResult {
   // into the A&D segment in the main loop below.
   const aAndDSchedules: AAndDLoanSchedule[] = []
   const aAndDContribByMonth = new Array<number>(months.length).fill(0)
+  // Same rule as the new-origination cohorts: a planned loan that should have
+  // originated by today is already in the imported loan report, so the
+  // forecast must not add it again.
+  //   origination before this month → 0   (fully on the books)
+  //   origination this month        → m0Frac (only the part of the month
+  //                                          still ahead of today)
+  //   origination after this month  → 1
+  // Applied identically to the totals, the per-parent slices and income,
+  // which each read the schedule, so they can't drift apart.
+  const aAndDScale: number[] = []
   for (const loan of input.aAndDLoans) {
     const builderName = loan.builder_id
       ? buildersById.get(loan.builder_id)?.name ?? null
       : null
     const { schedule, contributions } = projectAAndDLoan(loan, builderName, months)
+    const origKey = loan.origination_date ? loan.origination_date.slice(0, 7) : null
+    const scale = !origKey ? 1
+      : origKey < months[0].key ? 0
+      : origKey === months[0].key ? m0Frac
+      : 1
+    schedule.forecast_scale = scale
+    aAndDScale.push(scale)
     aAndDSchedules.push(schedule)
-    for (let i = 0; i < months.length; i++) aAndDContribByMonth[i] += contributions[i]
+    for (let i = 0; i < months.length; i++) aAndDContribByMonth[i] += contributions[i] * scale
   }
 
   // Imported A&D loans — flat-until-maturity, no draws/releases. Built here so
@@ -1097,7 +1123,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
       const loan  = input.aAndDLoans[k]
       const sched = aAndDSchedules[k]
       bump(aAndDByParent, parentIdForBuilder(loan?.builder_id ?? null),
-           sched.months[i]?.starting_balance ?? 0)
+           (sched.months[i]?.starting_balance ?? 0) * aAndDScale[k])
     }
 
     // Union of every parent that contributed anything (loans OR builder-
@@ -1201,7 +1227,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     for (let k = 0; k < aAndDSchedules.length; k++) {
       const loan  = input.aAndDLoans[k]
       const sched = aAndDSchedules[k]
-      const bal = sched.months[i]?.starting_balance ?? 0
+      const bal = (sched.months[i]?.starting_balance ?? 0) * aAndDScale[k]
       if (bal === 0) continue
       yield_a_and_d_planned += bal * (loan?.interest_rate || 0) / 12
     }
@@ -1438,6 +1464,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     new_origination_projects: newOriginationProjects,
     reconciliation: {
       month_zero_fraction: m0Frac,
+      proration_anchor: input.today ?? input.asOfDate,
       // Loans whose maturity date is strictly before as_of_date — those
       // contribute to the Active Loan (Outstanding) tile but not to the
       // engine's month-0 active_<seg> projection.

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { addMonths, format, startOfMonth } from 'date-fns'
-import { runForecast, originationsInMonth, type ForecastInput } from './calculator'
+import { runForecast, originationsInMonth, effectiveDraw, type ForecastInput } from './calculator'
 import type {
   Loan, LoanProgram, Builder, ForecastSettings, NewOriginationEntry, AAndDLoan,
 } from './types'
@@ -422,5 +422,53 @@ describe('originationsInMonth', () => {
         `mismatch for ${JSON.stringify(over)} — reason: ${helper.reason}`,
       ).toBe(helper.count)
     }
+  })
+})
+
+// ─── Draw curve: what the UI reports vs what the engine uses ─────────────────
+
+describe('effectiveDraw', () => {
+  // A 24-entry curve summing to 0.90, where the back 12 entries carry 0.30.
+  const CURVE_24 = [...Array(12).fill(0.05), ...Array(12).fill(0.025)]
+
+  it('truncates the curve at the term, matching the engine peak', () => {
+    // The raw array says "24 months, 90%". On a 12-month term the engine only
+    // ever applies the first 12 entries, so each loan peaks at 60% — a 30-point
+    // overstatement if you read the raw sum off the array.
+    const program: LoanProgram = {
+      ...SF_PROGRAM, draw_curve: CURVE_24, default_term_months: 12,
+    }
+    const eff = effectiveDraw(program)
+    expect(eff.drawMonths).toBe(12)
+    expect(eff.deadMonths).toBe(12)
+    expect(eff.pct).toBeCloseTo(0.60, 6)
+    expect(eff.rawPct).toBeCloseTo(0.90, 6)
+
+    // Prove it against the engine rather than trusting the arithmetic: one
+    // cohort of 10 × $100k = $1.0M of commitment.
+    const result = runForecast(baseInput({
+      loanPrograms: [program],
+      newOriginations: [origination({
+        loan_count: 10, avg_loan_amount: 100_000,
+        total_lots: 10, end_month: monthKey(0),
+      })],
+      settings: { ...SETTINGS, horizon_months: 30 },
+    }))
+    const peak = Math.max(...result.months.map(m => m.forecasted_sfr))
+    expect(peak).toBeCloseTo(1_000_000 * eff.pct, 0)
+  })
+
+  it('reports the full curve when the term covers it', () => {
+    const eff = effectiveDraw({ draw_curve: CURVE_24, default_term_months: 24 })
+    expect(eff.drawMonths).toBe(24)
+    expect(eff.deadMonths).toBe(0)
+    expect(eff.pct).toBeCloseTo(0.90, 6)
+  })
+
+  it('flags a curve that overfunds, since the engine clamps it at 100%', () => {
+    const eff = effectiveDraw({ draw_curve: [0.7, 0.7], default_term_months: 12 })
+    expect(eff.clamped).toBe(true)
+    expect(eff.pct).toBe(1)
+    expect(eff.rawPct).toBeCloseTo(1.4, 6)
   })
 })

@@ -64,6 +64,43 @@ function cumulativeDraw(curve: number[], ageMonths: number): number {
   return Math.min(sum, 1)
 }
 
+/**
+ * What a program's draw curve ACTUALLY does to the forecast, as opposed to
+ * what its raw array looks like.
+ *
+ * Two things make the raw array misleading, and both need reporting in the UI:
+ *
+ *  1. `lotOriginationBalance` zeroes a cohort once `age >= default_term_months`,
+ *     so any curve entry past the term never applies. A 24-entry curve summing
+ *     to 90% on a 12-month term peaks at the sum of its FIRST 12 entries.
+ *  2. `cumulativeDraw` clamps at 1, so entries summing past 100% are capped —
+ *     the loan funds fully and the surplus is discarded.
+ *
+ * `pct` is the fraction of each loan's amount the cohort actually reaches at
+ * its peak. `drawMonths` is how many curve entries are live. `deadMonths` is
+ * how many are stranded past the term.
+ */
+export function effectiveDraw(program: Pick<LoanProgram, 'draw_curve' | 'default_term_months'>): {
+  pct: number
+  rawPct: number
+  drawMonths: number
+  deadMonths: number
+  clamped: boolean
+} {
+  const curve = program.draw_curve ?? []
+  const term = program.default_term_months
+  const live = Math.max(0, Math.min(curve.length, term))
+  const rawSum = curve.reduce((a, b) => a + (Number(b) || 0), 0)
+  const liveSum = curve.slice(0, live).reduce((a, b) => a + (Number(b) || 0), 0)
+  return {
+    pct: Math.min(liveSum, 1),
+    rawPct: rawSum,
+    drawMonths: live,
+    deadMonths: Math.max(0, curve.length - live),
+    clamped: liveSum > 1,
+  }
+}
+
 // ─── Module 1: Land Bucket Engine ────────────────────────────────────────────
 
 interface LotOrigination {

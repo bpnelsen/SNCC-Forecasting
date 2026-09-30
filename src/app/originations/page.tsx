@@ -6,7 +6,8 @@ import {
 } from 'lucide-react'
 import { Builder, LoanProgram, LandBucketProject, NewOriginationEntry } from '@/lib/types'
 import { formatCurrency } from '@/lib/utils'
-import { originationsInMonth } from '@/lib/calculator'
+import { originationsInMonth, effectiveDraw } from '@/lib/calculator'
+import { DrawCurveEditor } from '@/components/assumptions/DrawCurveEditor'
 
 type FormState = Omit<NewOriginationEntry, 'id'> & { id?: string }
 
@@ -380,9 +381,33 @@ function BuilderBlock({
                     {prog ? (
                       <>
                         <div>{prog.name}</div>
-                        <div className="text-[10px] text-fg-dim">
-                          {prog.draw_curve.length} mo · {Math.round(prog.draw_curve.reduce((a, b) => a + b, 0) * 100)}%
-                        </div>
+                        {(() => {
+                          // Report what the forecast actually applies, not the
+                          // raw array. The engine zeroes a cohort at
+                          // default_term_months, so curve entries past the term
+                          // never fund anything — see effectiveDraw().
+                          const eff = effectiveDraw(prog)
+                          const pct = Math.round(eff.pct * 100)
+                          const off = pct !== 100
+                          return (
+                            <div
+                              className={`text-[10px] ${off ? 'text-danger' : 'text-fg-dim'}`}
+                              title={
+                                `Draws to ${pct}% of each loan over ${eff.drawMonths} month(s), then holds until the ${prog.default_term_months}-month term ends.`
+                                + (eff.deadMonths > 0
+                                  ? ` ${eff.deadMonths} curve month(s) past the term are ignored (raw curve sums to ${Math.round(eff.rawPct * 100)}%).`
+                                  : '')
+                                + (eff.clamped ? ' Curve exceeds 100% and is capped.' : '')
+                                + (off && eff.deadMonths === 0
+                                  ? ' A curve under 100% means these loans never fully fund.'
+                                  : '')
+                              }
+                            >
+                              draws {pct}% over {eff.drawMonths} mo · {prog.default_term_months} mo term
+                              {eff.deadMonths > 0 && ` · ${eff.deadMonths} mo ignored`}
+                            </div>
+                          )
+                        })()}
                       </>
                     ) : (
                       <span className="text-fg-dim">builder default</span>
@@ -869,8 +894,13 @@ function DrawCurveShortcut({
   }
 
   // Header summary so the collapsed state still tells you what's inside.
+  // Same effective-draw figure as the table, not the raw curve sum.
   const summary = targets
-    .map(p => `${p.name.replace(' Construction', '')}: ${p.draw_curve.length} mo · ${Math.round(p.draw_curve.reduce((a, b) => a + b, 0) * 100)}%`)
+    .map(p => {
+      const eff = effectiveDraw(p)
+      return `${p.name.replace(' Construction', '')}: ${Math.round(eff.pct * 100)}% over ${eff.drawMonths} mo`
+        + (eff.deadMonths > 0 ? ` (${eff.deadMonths} mo past term ignored)` : '')
+    })
     .join(' · ')
 
   return (
@@ -919,7 +949,7 @@ function DrawCurveShortcut({
           )}
 
           {targets.map(p => (
-            <DrawCurveGrid key={p.id} program={p} onChange={curve => patch(p.id, curve)} />
+            <DrawCurveEditor key={p.id} program={p} onChange={curve => patch(p.id, curve)} />
           ))}
         </div>
       )}
@@ -927,62 +957,3 @@ function DrawCurveShortcut({
   )
 }
 
-function DrawCurveGrid({
-  program, onChange,
-}: {
-  program: LoanProgram
-  onChange: (curve: number[]) => void
-}) {
-  const count = Math.max(24, program.draw_curve.length)
-  const sumPct = program.draw_curve.reduce((a, b) => a + b, 0) * 100
-  return (
-    <div className="border border-border-strong rounded-lg p-3 space-y-2">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="text-xs font-medium text-fg">{program.name}</div>
-          <div className="text-[10px] text-fg-dim">
-            Product type: {program.product_type} · default rate {(program.default_rate * 100).toFixed(2)}%
-            · term {program.default_term_months} mo
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            className="btn-ghost text-[10px] px-1.5 py-0.5"
-            onClick={() => onChange(Array.from({ length: count + 1 }, (_, j) => program.draw_curve[j] ?? 0))}
-          >+ Month</button>
-          <button
-            type="button"
-            className="btn-ghost text-[10px] px-1.5 py-0.5 disabled:opacity-40"
-            disabled={count <= 24}
-            onClick={() => {
-              if (count <= 24) return
-              onChange(program.draw_curve.slice(0, count - 1))
-            }}
-          >− Month</button>
-        </div>
-      </div>
-      <div className="grid grid-cols-4 md:grid-cols-6 gap-2">
-        {Array.from({ length: count }, (_, i) => (
-          <div key={i}>
-            <div className="text-[10px] text-fg-dim mb-0.5 text-center">M{i + 1}</div>
-            <input
-              type="number" step="1" min="0"
-              className="form-input text-right text-xs"
-              value={Math.round((program.draw_curve[i] ?? 0) * 100)}
-              onChange={e => {
-                const pct = Math.round(Number(e.target.value))
-                const next = Array.from({ length: count }, (_, j) => program.draw_curve[j] ?? 0)
-                next[i] = !isFinite(pct) || pct < 0 ? 0 : pct / 100
-                onChange(next)
-              }}
-            />
-          </div>
-        ))}
-      </div>
-      <div className="text-[10px] text-fg-dim">
-        Months: {count} · sum: {Math.round(sumPct)}%
-      </div>
-    </div>
-  )
-}

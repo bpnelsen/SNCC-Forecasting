@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Assumptions, LoanProgram } from '@/lib/types'
 import { Settings2, Save, AlertCircle, CheckCircle } from 'lucide-react'
 import { ParentCompaniesSection } from '@/components/assumptions/ParentCompaniesSection'
+import { DrawCurveEditor } from '@/components/assumptions/DrawCurveEditor'
 
 export default function AssumptionsPage() {
   const [data, setData]       = useState<Assumptions | null>(null)
@@ -176,69 +177,11 @@ export default function AssumptionsPage() {
                            onChange={e => updateProgram(p.id, { default_term_months: Number(e.target.value) || 0 })} />
                   </div>
                 </div>
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <div className="text-[10px] text-fg-dim">
-                      Draw curve — incremental % of max balance per month (sum ≈ 100%)
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        className="btn-ghost text-[10px] px-1.5 py-0.5"
-                        onClick={() => {
-                          const len = Math.max(24, p.draw_curve.length)
-                          updateProgram(p.id, {
-                            draw_curve: Array.from({ length: len + 1 }, (_, j) => p.draw_curve[j] ?? 0),
-                          })
-                        }}
-                      >+ Month</button>
-                      <button
-                        type="button"
-                        className="btn-ghost text-[10px] px-1.5 py-0.5 disabled:opacity-40"
-                        disabled={Math.max(24, p.draw_curve.length) <= 24}
-                        onClick={() => {
-                          const len = Math.max(24, p.draw_curve.length)
-                          if (len <= 24) return
-                          updateProgram(p.id, { draw_curve: p.draw_curve.slice(0, len - 1) })
-                        }}
-                      >− Month</button>
-                    </div>
-                  </div>
-                  {(() => {
-                    // Show at least 24 month inputs; never truncate a longer
-                    // curve (e.g. an 18- or 30-month program). The stored
-                    // curve is fractions; the grid edits percentages.
-                    const count = Math.max(24, p.draw_curve.length)
-                    const sumPct = p.draw_curve.reduce((a, b) => a + b, 0) * 100
-                    return (
-                      <>
-                        <div className="grid grid-cols-4 md:grid-cols-6 gap-2">
-                          {Array.from({ length: count }, (_, i) => (
-                            <div key={i}>
-                              <div className="text-[10px] text-fg-dim mb-0.5 text-center">M{i + 1}</div>
-                              <input
-                                type="number"
-                                step="1"
-                                min="0"
-                                className="form-input text-right text-xs"
-                                value={Math.round((p.draw_curve[i] ?? 0) * 100)}
-                                onChange={e => {
-                                  const pct = Math.round(Number(e.target.value))
-                                  const next = Array.from({ length: count }, (_, j) => p.draw_curve[j] ?? 0)
-                                  next[i] = !isFinite(pct) || pct < 0 ? 0 : pct / 100
-                                  updateProgram(p.id, { draw_curve: next })
-                                }}
-                              />
-                            </div>
-                          ))}
-                        </div>
-                        <div className="text-[10px] text-fg-dim mt-2">
-                          Months: {count} · sum: {Math.round(sumPct)}%
-                        </div>
-                      </>
-                    )
-                  })()}
-                </div>
+                <DrawCurveEditor
+                  program={p}
+                  showHeader={false}
+                  onChange={curve => updateProgram(p.id, { draw_curve: curve })}
+                />
               </div>
             ))}
           </div>

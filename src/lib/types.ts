@@ -357,6 +357,11 @@ export interface LandBucketProject {
   // Optional manual lot-release override. Keys are YYYY-MM, values are the
   // integer lots released that month. When non-empty, overrides absorption_rate.
   lot_release_schedule: Record<string, number>
+  // Projected balance increases (migration 022). YYYY-MM → dollars added at
+  // the start of that month. Months up to and including the current one are
+  // ignored: balance_outstanding already is today's balance. Optional so rows
+  // read before the migration has run still type-check and forecast as before.
+  balance_increase_schedule?: Record<string, number>
   notes: string | null
 }
 
@@ -557,9 +562,13 @@ export interface LandBucketMonth {
   lots_sold_cumulative: number
   lots_remaining: number
   sale_proceeds: number
-  // Balance at the START of the month, before this month's sale activity.
-  // Month 0 = sum of project.balance_outstanding (the Land Bucket tab's
-  // "Grand total"); month i = previous month's ending_balance.
+  // Projected increase applied at the start of this month (balance_increase_
+  // schedule). Always 0 in month 0, whose balance is balance_outstanding.
+  balance_increase: number
+  // Balance at the START of the month, after this month's projected increase
+  // and before its sale activity. Month 0 = sum of project.balance_outstanding
+  // (the Land Bucket tab's "Grand total"); month i = previous month's
+  // ending_balance + this month's increase.
   starting_balance: number
   ending_balance: number
   interest_income: number

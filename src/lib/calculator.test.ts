@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { addMonths, format, startOfMonth } from 'date-fns'
-import { runForecast, originationsInMonth, effectiveDraw, type ForecastInput } from './calculator'
+import {
+  runForecast, originationsInMonth, effectiveDraw, previewLandBucketProject, type ForecastInput,
+} from './calculator'
+import { totalOutstandingAll } from './summary'
 import type {
   Loan, LoanProgram, Builder, ForecastSettings, NewOriginationEntry, AAndDLoan, LandBucketProject,
 } from './types'
@@ -897,5 +900,78 @@ describe('payoffs beside Total Outstanding (Loans)', () => {
     expect(all).toBeGreaterThan(0)   // LB cohorts do pay off, for cash flow
     expect(loans).toBe(0)            // but not beside the Loans total
     expect(r.months.every(m => m.forecasted_sfr === 0)).toBe(true)
+  })
+})
+
+// ─── Land Bucket projected balance increases ─────────────────────────────────
+
+describe('Land Bucket projected balance increases', () => {
+  const PARENT = 'parent-1'
+  const project = (over: Partial<LandBucketProject> = {}): LandBucketProject => ({
+    id: 'lb1', name: 'Willow Creek', builder_id: BUILDER.id, total_lots: 0, lot_price: 0,
+    absorption_rate: 0, balance_outstanding: 1_000_000, interest_rate: 0.12,
+    dev_start_date: null, dev_end_date: null, lot_sales_start_date: null,
+    vertical_loan_program_id: null, vertical_loan_amount: null, lot_release_schedule: {},
+    balance_increase_schedule: { [monthKey(2)]: 500_000 },
+    notes: null, ...over,
+  })
+  const run = (over: Partial<LandBucketProject> = {}, input: Partial<ForecastInput> = {}) => runForecast(baseInput({
+    landBucketProjects: [project(over)],
+    builders: [{ ...BUILDER, parent_company_id: PARENT }],
+    settings: { ...SETTINGS, horizon_months: 5 },
+    ...input,
+  }))
+
+  it('shows in its own month and every month after', () => {
+    const r = run()
+    expect(r.months.map(m => m.land_bucket)).toEqual([
+      1_000_000, 1_000_000, 1_500_000, 1_500_000, 1_500_000,
+    ])
+  })
+
+  it('is ignored for the current month, which is already Balance Outstanding', () => {
+    const r = run({ balance_increase_schedule: { [monthKey(0)]: 500_000 } })
+    expect(r.months.every(m => m.land_bucket === 1_000_000)).toBe(true)
+  })
+
+  it('carries into Total Outstanding (All), Total (All) and the parent slice', () => {
+    const base = run({ balance_increase_schedule: {} })
+    const r = run()
+    expect(r.months[2].total_all - base.months[2].total_all).toBe(500_000)
+    expect(totalOutstandingAll(r.months[2]) - totalOutstandingAll(base.months[2])).toBe(500_000)
+    expect(r.months[2].by_parent[PARENT].land_bucket).toBe(1_500_000)
+  })
+
+  it('earns interest from its month, and is cash out that month', () => {
+    const base = run({ balance_increase_schedule: {} })
+    const r = run()
+    // 12% on the extra $500K = $5,000 a month, from month 2.
+    expect(r.months[1].total_income - base.months[1].total_income).toBeCloseTo(0, 6)
+    expect(r.months[2].total_income - base.months[2].total_income).toBeCloseTo(5_000, 6)
+    // Funding the increase is an outflow in its month, less that month's interest.
+    expect(r.months[2].cash_flow - base.months[2].cash_flow).toBeCloseTo(-500_000 + 5_000, 6)
+  })
+
+  it('still pays down with lot sales', () => {
+    // 1 lot a month at $100K from month 1.
+    const r = run({
+      total_lots: 10, lot_price: 100_000,
+      lot_release_schedule: { [monthKey(1)]: 1, [monthKey(2)]: 1, [monthKey(3)]: 1 },
+    })
+    // m1 opens 1.0M, sells 100K → 900K; m2 opens 900K + 500K = 1.4M, sells → 1.3M; m3 opens 1.3M.
+    expect(r.months.slice(0, 4).map(m => m.land_bucket)).toEqual([1_000_000, 1_000_000, 1_400_000, 1_300_000])
+  })
+
+  it('previews in the editor exactly as the forecast computes it', () => {
+    const p = project({
+      total_lots: 10, lot_price: 100_000,
+      lot_release_schedule: { [monthKey(1)]: 1, [monthKey(3)]: 2 },
+      balance_increase_schedule: { [monthKey(2)]: 500_000, [monthKey(4)]: 250_000 },
+    })
+    const forecast = runForecast(baseInput({
+      landBucketProjects: [p], settings: { ...SETTINGS, horizon_months: 5 },
+    })).land_bucket_schedules[0].months
+    const preview = previewLandBucketProject(p, [BUILDER], [SF_PROGRAM], 5)
+    expect(preview).toEqual(forecast)
   })
 })

@@ -138,6 +138,7 @@ function runLandBucket(
     lots_sold_cumulative: 0,
     lots_remaining: 0,
     sale_proceeds: 0,
+    balance_increase: 0,
     starting_balance: 0,
     ending_balance: 0,
     interest_income: 0,
@@ -154,6 +155,7 @@ function runLandBucket(
       : null
     const manualSchedule = project.lot_release_schedule ?? {}
     const hasManualSchedule = Object.keys(manualSchedule).length > 0
+    const increases = project.balance_increase_schedule ?? {}
 
     const monthly: LandBucketMonth[] = []
     let balance = project.balance_outstanding
@@ -163,9 +165,22 @@ function runLandBucket(
     for (let i = 0; i < months.length; i++) {
       const { date: monthDate, key, label } = months[i]
       const lotsRemaining = Math.max(0, project.total_lots - lotsSoldCum)
+
+      // Projected balance increase for this month (further land draws,
+      // development spend), applied at the START of the month so it shows in
+      // this month's balance and earns interest from it. Every Land Bucket
+      // figure in the app reads starting_balance, so this one line carries it
+      // through the dashboard, Forecast tab, totals, income and parent slices.
+      //
+      // Skipped in month 0: balance_outstanding is today's balance, so adding
+      // this month's increase on top would count it twice.
+      const increase = i === 0 ? 0 : Math.max(0, Number(increases[key]) || 0)
+      balance += increase
+
       // Captured BEFORE any sale activity this month, so month 0's starting
       // balance = project.balance_outstanding (matches the Land Bucket tab's
-      // Grand total). Subsequent months pick up the prior month's ending.
+      // Grand total). Subsequent months pick up the prior month's ending plus
+      // this month's increase.
       const startingBalance = balance
 
       // Interest computed on starting balance — fixed rate, paid current.
@@ -212,6 +227,7 @@ function runLandBucket(
         lots_sold_cumulative: lotsSoldCum,
         lots_remaining: project.total_lots - lotsSoldCum,
         sale_proceeds: proceeds,
+        balance_increase: increase,
         starting_balance: startingBalance,
         ending_balance: balance,
         interest_income: interestIncome,
@@ -224,6 +240,7 @@ function runLandBucket(
       t.lots_sold_cumulative += lotsSoldCum
       t.lots_remaining += project.total_lots - lotsSoldCum
       t.sale_proceeds += proceeds
+      t.balance_increase += increase
       t.starting_balance += startingBalance
       t.ending_balance += balance
       t.interest_income += interestIncome
@@ -243,6 +260,24 @@ function runLandBucket(
   }
 
   return { schedules, lotOriginations, totals }
+}
+
+/**
+ * One Land Bucket project's month-by-month schedule, computed by the same
+ * runLandBucket the forecast uses, from the current month. The editor's
+ * projected-balance preview calls this so it can never disagree with the
+ * Dashboard or the Forecast tab: same increases, same lot sales, same paydown.
+ */
+export function previewLandBucketProject(
+  project: LandBucketProject,
+  builders: Builder[],
+  programs: LoanProgram[],
+  horizonMonths = 24,
+): LandBucketMonth[] {
+  const months = generateMonths(startOfMonth(new Date()), Math.max(1, horizonMonths))
+  const buildersById = new Map(builders.map(b => [b.id, b]))
+  const programsById = new Map(programs.map(p => [p.id, p]))
+  return runLandBucket([project], buildersById, programsById, months).schedules[0]?.months ?? []
 }
 
 // ─── Module 2: Vertical Loan Engine ──────────────────────────────────────────
@@ -1290,7 +1325,10 @@ export function runForecast(input: ForecastInput): ForecastResult {
 
     // Net new draws this month = positive change in total vertical balance
     const draws = i === 0 ? 0 : Math.max(0, total_loans - (monthly[i - 1].total_loans))
-    const cash_flow = total_income + payoffs_amount + lb.totals[i].sale_proceeds - draws
+    // Land Bucket increases are cash out — the lender funds them — just as
+    // lot-sale proceeds are cash in.
+    const cash_flow = total_income + payoffs_amount + lb.totals[i].sale_proceeds
+                    - lb.totals[i].balance_increase - draws
 
     const variance = i === 0 ? 0 : total_all - prevTotalAll
     prevTotalAll = total_all

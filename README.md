@@ -42,7 +42,7 @@ Create a project at [supabase.com](https://supabase.com), pick a nearby region, 
 ### 3. Run the database migrations — **all of them, in order**
 
 In Supabase Dashboard → **SQL Editor**, run every file in `supabase/migrations/`
-in filename order (`001_…` through `021_…`).
+in filename order (`001_…` through `022_…`).
 
 Running only `001` is not enough — the app will not start. `002` creates
 `forecast_settings`, which `/api/calculate` requires, and later migrations add
@@ -69,6 +69,7 @@ true, and asserts RLS is enabled on every table.
 | `017`–`019` | Reclassify existing loans by program |
 | `020` | **Enables RLS on every table** |
 | `021` | Drops the orphaned `scheduled_originations` table (guarded — refuses if it has rows) |
+| `022` | Adds `balance_increase_schedule` to Land Bucket projects (projected monthly balance increases). Until it runs, projects save normally but increases can't be saved |
 
 ### 4. Configure environment variables
 
@@ -305,7 +306,7 @@ src/
     ├── parser.ts               # Excel → Loan[]  (+ parser.test.ts)
     ├── calculator.ts           # forecast engine  (+ calculator.test.ts)
     └── types.ts, utils.ts, gemini-tools.ts
-supabase/migrations/            # 001–021, apply all in order
+supabase/migrations/            # 001–022, apply all in order
 .github/workflows/ci.yml        # typecheck, lint, test, build, migrations
 ```
 

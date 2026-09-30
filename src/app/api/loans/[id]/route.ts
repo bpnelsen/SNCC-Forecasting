@@ -14,8 +14,10 @@ const ALLOWED_LOAN_TYPES: LoanType[] = [
 // version is the source of truth for the rest of the loan record.
 export async function PATCH(
   req: Request,
-  ctx: { params: { id: string } },
+  ctx: { params: Promise<{ id: string }> },
 ) {
+  const { id } = await ctx.params
+
   try {
     const body = await req.json().catch(() => ({}))
     const patch: Record<string, number | string> = {}
@@ -51,7 +53,7 @@ export async function PATCH(
     const { data, error } = await sb
       .from('loans')
       .update(patch)
-      .eq('id', ctx.params.id)
+      .eq('id', id)
       .select()
       .single()
 

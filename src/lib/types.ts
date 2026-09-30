@@ -183,6 +183,15 @@ export interface ForecastResult {
   as_of_date: string
   version_label: string
   total_active_loans: number
+  // Data-quality counters for the active version. Both conditions quietly
+  // distort the forecast, so the dashboard surfaces them rather than leaving
+  // them to be noticed as an unexplained number.
+  //   unclassified_loan_count: loan_type === 'UNKNOWN'. These roll into the
+  //     HHH/JV segment, so a renamed Loan Program in the export inflates HHH.
+  //   no_maturity_loan_count: no current_loan_due_date, so the engine never
+  //     pays the loan off and holds it flat across the whole horizon.
+  unclassified_loan_count: number
+  no_maturity_loan_count: number
   // Sum of loan_amount_disbursed (cash actually drawn/funded) across every
   // loan in the active version, broken out by product type so the dashboard
   // can respect the product-type filter. `total` = sum of all segments.
@@ -245,10 +254,12 @@ export interface ForecastResult {
     // Forecasted SFR/MFR is scaled by this.
     month_zero_fraction: number
     // Σ loan_amount_disbursed across imported loans whose maturity date is
-    // strictly before the as_of_date. These contribute to the Active Loan
-    // (Outstanding) tile (sumDisbursed has no maturity gate) but NOT to
-    // m.active_<seg> at month 0 (projectExistingLoanOutstanding zeroes
-    // matured loans). That delta explains "why tile > Monthly Summary".
+    // strictly before the as_of_date. Reported for traceability only: since
+    // the "matured loans stay on the books" change, month 0 has no maturity
+    // gate (projectExistingLoanOutstanding), so these contribute to BOTH the
+    // Active Loan (Outstanding) tile and m.active_<seg> at month 0 and are
+    // not a source of divergence between them. The gate starts at month 1,
+    // which is why the segment rows decay from there.
     matured_disbursed: number
     // Δ between sumExistingOut(FL loans) at month 0 and sumDisbursed(FL).
     // FL loans where current_loan_amount > loan_amount_disbursed start the

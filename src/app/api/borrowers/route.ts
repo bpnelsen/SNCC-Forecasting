@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
+import { fetchAll } from '@/lib/fetch-all'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,10 +29,9 @@ export async function GET() {
       .single()
     if (ve || !version) return NextResponse.json([])
 
-    const { data, error } = await sb
-      .from('loans')
-      .select('borrower')
-      .eq('version_id', version.id)
+    const { data, error } = await fetchAll<{ borrower: string | null }>(
+      sb.from('loans').select('borrower').eq('version_id', version.id),
+    )
     if (error) throw error
 
     const counts = new Map<string, number>()

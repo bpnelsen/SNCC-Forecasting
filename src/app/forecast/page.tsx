@@ -4,82 +4,43 @@ import { useEffect, useState } from 'react'
 import { ForecastResult, MonthlyBalance, OriginationProjectDetail } from '@/lib/types'
 import { formatCurrency } from '@/lib/utils'
 import { TrendingUp, AlertCircle, Filter } from 'lucide-react'
+import { type FilterKey, CHIPS, ALL_KEYS, applyFilter } from '@/lib/dashboard-filter'
+import {
+  activeOnBooks, forecastedAnd, forecastLayer, totalOutstandingLoans, totalOutstandingAll,
+} from '@/lib/summary'
 
-// Product-type chips — same set as the dashboard so the two pages filter
-// consistently. Land Bucket only affects Grand Total (no forecasted-origination
-// concept for raw land bucket inventory).
-type FilterKey = 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh' | 'land_bucket'
-
-const CHIPS: { key: FilterKey; label: string; color: string }[] = [
-  { key: 'sfr',           label: 'SFR',           color: '#58A6FF' },
-  { key: 'mfr',           label: 'MFR',           color: '#D4A853' },
-  { key: 'and',           label: 'A&D',           color: '#3FB950' },
-  { key: 'raw_land',      label: 'Raw Land',      color: '#8B949E' },
-  { key: 'finished_lots', label: 'Finished Lots', color: '#A371F7' },
-  { key: 'hhh',           label: 'HHH/JV',        color: '#F85149' },
-  { key: 'land_bucket',   label: 'Land Bucket',   color: '#79C0FF' },
-]
+// Chips, filtering and every total come from the same modules the Dashboard
+// uses, so the Forecast tab reconciles with the Monthly Summary Table by
+// construction: Fcst SFR / MFR / A&D, Total Fcst, Active Loan (Outstanding),
+// Total Outstanding (Loans) and Total Outstanding (All) are the same numbers
+// as the Dashboard rows of the same names, for any chip selection.
+//
+// This page used to recombine engine fields itself, and had drifted: Total
+// Fcst left out planned A&D loans; Active Portfolio summed outstanding_<seg>,
+// which also carries Land-Bucket-driven cohorts and HHH/JV (both kept out of
+// the Dashboard's Loans total); and Current Loan Balance was a second copy of
+// Active Portfolio.
 
 const PRODUCT_KEYS = ['sfr', 'mfr', 'and', 'raw_land', 'finished_lots', 'hhh'] as const
 
-// Per-row sliced figures driven by the active chips. Land Bucket only feeds
-// the Grand Total; everything else flows from the six product-type chips.
-function sliceMonth(m: MonthlyBalance, active: Set<FilterKey>) {
-  let newOrigCount = 0
-  let newOrigAmount = 0
-  let forecastedTotal = 0
-  let activePortfolio = 0
-  // Drawn/outstanding loan balance and per-segment payoffs both follow the
-  // chip filter so the new columns line up with the rest of the row.
-  let currentLoanBalance = 0
-  let payoffsAmount = 0
+// Flows (new originations, payoffs) aren't sliced by applyFilter, so they are
+// filtered here by the same chips. `raw` is the unfiltered engine month.
+function flows(raw: MonthlyBalance, active: Set<FilterKey>) {
+  let newOrigCount = 0, newOrigAmount = 0, payoffsAmount = 0
   for (const k of PRODUCT_KEYS) {
     if (!active.has(k)) continue
-    newOrigCount     += m.new_origs_by_segment[k].count
-    newOrigAmount    += m.new_origs_by_segment[k].amount
-    forecastedTotal  += k === 'sfr'           ? m.forecasted_sfr
-                      : k === 'mfr'           ? m.forecasted_mfr
-                      : k === 'and'           ? m.forecasted_and
-                      : k === 'raw_land'      ? m.forecasted_raw_land
-                      : k === 'finished_lots' ? m.forecasted_finished_lots
-                      :                          m.forecasted_hhh
-    // Active Portfolio and Current Loan Balance both read outstanding_<seg>
-    // so the columns reconcile cell-for-cell: existing loans contribute
-    // their drawn (loan_amount_disbursed) amount, new cohorts contribute
-    // their curve-driven drawn balance, and both go to 0 at maturity.
-    activePortfolio  += k === 'sfr'           ? m.outstanding_sfr
-                      : k === 'mfr'           ? m.outstanding_mfr
-                      : k === 'and'           ? m.outstanding_and
-                      : k === 'raw_land'      ? m.outstanding_raw_land
-                      : k === 'finished_lots' ? m.outstanding_finished_lots
-                      :                          m.outstanding_hhh
-    currentLoanBalance += k === 'sfr'           ? m.outstanding_sfr
-                       :  k === 'mfr'           ? m.outstanding_mfr
-                       :  k === 'and'           ? m.outstanding_and
-                       :  k === 'raw_land'      ? m.outstanding_raw_land
-                       :  k === 'finished_lots' ? m.outstanding_finished_lots
-                       :                           m.outstanding_hhh
-    payoffsAmount    += m.payoffs_by_segment?.[k] ?? 0
+    newOrigCount  += raw.new_origs_by_segment[k].count
+    newOrigAmount += raw.new_origs_by_segment[k].amount
+    payoffsAmount += raw.payoffs_by_segment?.[k] ?? 0
   }
-  const grandTotal = activePortfolio + (active.has('land_bucket') ? m.land_bucket : 0)
-  return {
-    newOrigCount,
-    newOrigAmount,
-    payoffsAmount,
-    fcstSfr:        active.has('sfr') ? m.forecasted_sfr : 0,
-    fcstMfr:        active.has('mfr') ? m.forecasted_mfr : 0,
-    forecastedTotal,
-    activePortfolio,
-    currentLoanBalance,
-    grandTotal,
-  }
+  return { newOrigCount, newOrigAmount, payoffsAmount }
 }
 
 export default function ForecastPage() {
   const [data, setData]       = useState<ForecastResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
-  const [active, setActive]   = useState<Set<FilterKey>>(new Set(CHIPS.map(c => c.key)))
+  const [active, setActive]   = useState<Set<FilterKey>>(new Set(ALL_KEYS))
   // Detailed view: three per-project × month tables below the summary.
   const [detailed, setDetailed] = useState(false)
 
@@ -99,6 +60,9 @@ export default function ForecastPage() {
   )
   if (!data) return null
 
+  // Same slicing as the Dashboard (no parent filter on this page).
+  const filtered = applyFilter(data.months, active, null)
+
   const toggle = (key: FilterKey) => {
     const next = new Set(active)
     if (next.has(key)) next.delete(key); else next.add(key)
@@ -113,7 +77,7 @@ export default function ForecastPage() {
           New Originations Forecast
         </h1>
         <p className="text-xs text-fg-dim mt-0.5">
-          17-month forward projection · {data.version_label}
+          {data.months.length}-month forward projection · {data.version_label}
         </p>
       </div>
 
@@ -176,29 +140,32 @@ export default function ForecastPage() {
                 <th className="text-right">Payoffs</th>
                 <th className="text-right">Fcst SFR</th>
                 <th className="text-right">Fcst MFR</th>
+                <th className="text-right">Fcst A&amp;D</th>
                 <th className="text-right">Total Fcst</th>
-                <th className="text-right">Active Portfolio</th>
-                <th className="text-right">Current Loan Balance</th>
-                <th className="text-right">Grand Total</th>
+                <th className="text-right" title="Imported loans on the books. Month 1 ties to the Dashboard's Active Loan (Outstanding) tile.">Active Loan (Outstanding)</th>
+                <th className="text-right" title="Active Loan (Outstanding) + Total Fcst — the Dashboard's Total Outstanding (Loans) row">Total Outstanding (Loans)</th>
+                <th className="text-right" title="Loans + HHH/JV + Land Bucket — the Dashboard's Total Outstanding (All) row">Total Outstanding (All)</th>
               </tr>
             </thead>
             <tbody>
-              {data.months.map(m => {
-                const s = sliceMonth(m, active)
+              {data.months.map((raw, i) => {
+                const m = filtered[i]
+                const f = flows(raw, active)
                 return (
-                  <tr key={m.month}>
-                    <td className="text-fg font-medium">{m.label}</td>
-                    <td className="num">{s.newOrigCount || '—'}</td>
-                    <td className="num">{s.newOrigAmount ? formatCurrency(s.newOrigAmount, true) : '—'}</td>
+                  <tr key={raw.month}>
+                    <td className="text-fg font-medium">{raw.label}</td>
+                    <td className="num">{f.newOrigCount || '—'}</td>
+                    <td className="num">{f.newOrigAmount ? formatCurrency(f.newOrigAmount, true) : '—'}</td>
                     <td className="num text-danger">
-                      {s.payoffsAmount ? `−${formatCurrency(s.payoffsAmount, true)}` : '—'}
+                      {f.payoffsAmount ? `−${formatCurrency(f.payoffsAmount, true)}` : '—'}
                     </td>
-                    <td className="num text-success-bright">{formatCurrency(s.fcstSfr, true)}</td>
-                    <td className="num text-success-bright">{formatCurrency(s.fcstMfr, true)}</td>
-                    <td className="num font-medium">{formatCurrency(s.forecastedTotal, true)}</td>
-                    <td className="num">{formatCurrency(s.activePortfolio, true)}</td>
-                    <td className="num">{formatCurrency(s.currentLoanBalance, true)}</td>
-                    <td className="num font-medium text-accent">{formatCurrency(s.grandTotal, true)}</td>
+                    <td className="num text-success-bright">{formatCurrency(m.forecasted_sfr, true)}</td>
+                    <td className="num text-success-bright">{formatCurrency(m.forecasted_mfr, true)}</td>
+                    <td className="num text-success-bright">{formatCurrency(forecastedAnd(m), true)}</td>
+                    <td className="num font-medium">{formatCurrency(forecastLayer(m), true)}</td>
+                    <td className="num">{formatCurrency(activeOnBooks(m), true)}</td>
+                    <td className="num font-medium">{formatCurrency(totalOutstandingLoans(m), true)}</td>
+                    <td className="num font-medium text-accent">{formatCurrency(totalOutstandingAll(m), true)}</td>
                   </tr>
                 )
               })}

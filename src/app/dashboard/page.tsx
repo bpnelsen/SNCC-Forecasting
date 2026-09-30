@@ -13,6 +13,9 @@ import { UNASSIGNED_PARENT_KEY } from '@/lib/calculator'
 import {
   type FilterKey, type FilterChip, CHIPS, ALL_KEYS, applyFilter,
 } from '@/lib/dashboard-filter'
+import {
+  activeOnBooks, forecastedAnd, forecastLayer, totalOutstandingLoans, totalOutstandingAll,
+} from '@/lib/summary'
 
 // Render the active version's as_of_date (YYYY-MM-DD from the engine) as
 // "May 14, 2026". Parsed manually so timezone shifts can't bump it by a day.
@@ -369,19 +372,15 @@ interface ReconciliationPanelProps {
 function ReconciliationPanel({ months, outstandingTile, reconciliation, asOfDate }: ReconciliationPanelProps) {
   if (months.length === 0) return null
   const m0 = months[0]
-  const fcstAnd0 = m0.forecasted_and + m0.a_and_d_planned
-  const loansSum =
-    m0.active_sfr + m0.active_mfr + m0.active_and +
-    m0.active_raw_land + m0.active_finished_lots +
-    m0.forecasted_sfr + m0.forecasted_mfr + fcstAnd0
-  const allSum = loansSum + m0.hhh + m0.land_bucket
+  const fcstAnd0 = forecastedAnd(m0)
+  const loansSum = totalOutstandingLoans(m0)
+  const allSum = totalOutstandingAll(m0)
 
-  // Active Loan (Outstanding) tile vs Σ active_<seg> at month 0. After the
-  // "matured loans stay on the books" change, the only residual delta is
-  // the FL basis (active uses max(disbursed, current_loan_amount); tile
-  // uses disbursed). The forecasted SFR/MFR/A&D cohort balance is in
-  // loansSum but not in the tile, hence the subtractions below.
-  const activeOnly = loansSum - m0.forecasted_sfr - m0.forecasted_mfr - fcstAnd0
+  // Active Loan (Outstanding) tile vs Σ active_<seg> at month 0. The only
+  // residual delta is the FL basis (active uses max(disbursed,
+  // current_loan_amount); tile uses disbursed). The forecast layer is in
+  // loansSum but not in the tile.
+  const activeOnly = activeOnBooks(m0)
   const tileVsActive = outstandingTile - activeOnly
   const expectedDelta = -reconciliation.fl_basis_delta
   const unexplained = tileVsActive - expectedDelta
@@ -401,7 +400,7 @@ function ReconciliationPanel({ months, outstandingTile, reconciliation, asOfDate
       rhs: outstandingTile,
       note:
         `Expected gap ${fmt(loansSum - outstandingTile)} = forecast layer `
-        + `${fmt(m0.forecasted_sfr + m0.forecasted_mfr + fcstAnd0)} `
+        + `${fmt(forecastLayer(m0))} `
         + `(Forecasted SFR ${fmt(m0.forecasted_sfr)} + MFR ${fmt(m0.forecasted_mfr)} + A&D ${fmt(fcstAnd0)})`
         + ` + FL basis Δ ${fmt(reconciliation.fl_basis_delta)}`
         + (Math.abs(unexplained) < 1
@@ -499,12 +498,6 @@ function SummaryTable({ months }: { months: MonthlyBalance[] }) {
   // three Forecasted rows). LB-driven verticals and HHH/JV are deliberately
   // excluded — LB is its own row, HHH/JV is sourced from the manual tab.
   // Forecasted A&D = scheduled A&D cohorts + planned A&D loans (/a-and-d tab).
-  const fcstAnd = (m: MonthlyBalance) => m.forecasted_and + m.a_and_d_planned
-  const outLoans = (m: MonthlyBalance) =>
-    m.active_sfr + m.active_mfr + m.active_and +
-    m.active_raw_land + m.active_finished_lots +
-    m.forecasted_sfr + m.forecasted_mfr + fcstAnd(m)
-
   const rows: SummaryRow[] = [
     { label: 'SFR',             values: months.map(m => m.active_sfr),             kind: 'currency' },
     { label: 'MFR',             values: months.map(m => m.active_mfr),             kind: 'currency' },
@@ -516,14 +509,14 @@ function SummaryTable({ months }: { months: MonthlyBalance[] }) {
     // Forecasted A&D = scheduled A&D cohorts (drawn) + planned A&D loans'
     // contribution from /a-and-d this month. Both are prorated by today like
     // SFR and MFR; see lotOriginationBalance in calculator.ts.
-    { label: 'Forecasted A&D',  values: months.map(fcstAnd),                       kind: 'currency', emphasis: 'forecast' },
+    { label: 'Forecasted A&D',  values: months.map(forecastedAnd),                       kind: 'currency', emphasis: 'forecast' },
     // HHH/JV is an equity investment, not a loan. Sourced from the manual
     // /hhh-jv tab. Excluded from Total Outstanding (Loans); included in
     // Total Outstanding (All) and Total (All).
     { label: 'HHH/JV',          values: months.map(m => m.hhh),                    kind: 'currency' },
     { label: 'Land Bucket',     values: months.map(m => m.land_bucket),            kind: 'currency' },
-    { label: 'Total Outstanding (Loans)', values: months.map(outLoans),                                        kind: 'currency', emphasis: 'total' },
-    { label: 'Total Outstanding (All)',   values: months.map(m => outLoans(m) + m.hhh + m.land_bucket),        kind: 'currency', emphasis: 'total' },
+    { label: 'Total Outstanding (Loans)', values: months.map(totalOutstandingLoans),                                        kind: 'currency', emphasis: 'total' },
+    { label: 'Total Outstanding (All)',   values: months.map(totalOutstandingAll),        kind: 'currency', emphasis: 'total' },
     { label: 'Total (All)',     values: months.map(m => m.total_all),              kind: 'currency', emphasis: 'total' },
     { label: 'Variance',      values: months.map(m => m.variance),                kind: 'variance' },
     { label: 'Income',        values: months.map(m => m.total_income),            kind: 'currency', emphasis: 'accent' },

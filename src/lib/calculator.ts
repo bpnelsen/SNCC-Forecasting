@@ -1235,31 +1235,57 @@ export function runForecast(input: ForecastInput): ForecastResult {
                        + yield_hhh_jv + yield_a_and_d_planned
     const annualized_yield_pct = total_all > 0 ? (total_income / total_all) * 12 : 0
 
-    // Payoff detection: existing loan whose balance transitioned to 0
+    // Payoffs: the balance that leaves when a loan ends — measured the same
+    // way the balance columns measure it, so the Payoffs column explains the
+    // drop in Active / Forecasted balances instead of exceeding it.
+    //
+    // Previously both halves paid off at FACE. Existing loans used
+    // projectExistingLoanBalance (max of projected, current_loan_amount and
+    // disbursed — the commitment), so a $500K construction loan $300K drawn
+    // paid off $500K. Cohorts paid off count × max_amount_per_loan: 100% of
+    // commitment regardless of the draw curve, and regardless of the
+    // this-month proration — a cohort the forecast carries at 0% (already in
+    // the loan report) still paid off in full at term, on top of the imported
+    // copy paying off at its own maturity.
+    //
+    // payoffs_loans_by_segment excludes Land-Bucket-driven cohorts, matching
+    // Total Outstanding (Loans); payoffs_by_segment / payoffs_amount include
+    // them, matching total_loans and cash flow.
     let payoffs_count = 0
     let payoffs_amount = 0
     const payoffs_by_segment: Record<Segment, number> = {
       sfr: 0, mfr: 0, and: 0, raw_land: 0, finished_lots: 0, hhh: 0,
     }
+    const payoffs_loans_by_segment: Record<Segment, number> = {
+      sfr: 0, mfr: 0, and: 0, raw_land: 0, finished_lots: 0, hhh: 0,
+    }
     for (const loan of input.loans) {
       const key = loan.id ?? loan.loan_number
-      const curr = projectExistingLoanBalance(loan, m.date, input.loanPrograms, startDate)
+      const curr = projectExistingLoanOutstanding(loan, m.date, startDate)
       const prev = prevExistingBalances.get(key) ?? 0
       if (i > 0 && prev > 0 && curr === 0) {
+        const seg = loanTypeToSegment[loan.loan_type]
         payoffs_count += 1
         payoffs_amount += prev
-        payoffs_by_segment[loanTypeToSegment[loan.loan_type]] += prev
+        payoffs_by_segment[seg] += prev
+        payoffs_loans_by_segment[seg] += prev
       }
       prevExistingBalances.set(key, curr)
     }
-    // Lot-driven cohorts: pay off when age == term
+    // Cohorts pay off at term, for the drawn balance they carried in their
+    // last month (lotOriginationBalance zeroes them at age === term), scaled
+    // exactly as that balance was.
+    const scheduledSet = new Set(scheduledOriginations)
     for (const orig of allOriginations) {
-      if (i - orig.origination_month_idx === orig.program.default_term_months) {
-        payoffs_count += orig.count
-        const amount = orig.count * orig.max_amount_per_loan
-        payoffs_amount += amount
-        payoffs_by_segment[PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]] += amount
-      }
+      const term = orig.program.default_term_months
+      if (term <= 0 || i - orig.origination_month_idx !== term) continue
+      const amount = lotOriginationBalance(orig, i - 1, m0Frac)
+      if (amount <= 0) continue
+      const seg = PRODUCT_TYPE_TO_SEGMENT[orig.program.product_type]
+      payoffs_count += Math.round(orig.count * (orig.origination_month_idx === 0 ? m0Frac : 1))
+      payoffs_amount += amount
+      payoffs_by_segment[seg] += amount
+      if (scheduledSet.has(orig)) payoffs_loans_by_segment[seg] += amount
     }
 
     // Net new draws this month = positive change in total vertical balance
@@ -1330,6 +1356,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
       payoffs_count,
       payoffs_amount,
       payoffs_by_segment,
+      payoffs_loans_by_segment,
       cash_flow,
     })
   }

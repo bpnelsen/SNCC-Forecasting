@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { addMonths, format, startOfMonth } from 'date-fns'
 import { runForecast, originationsInMonth, effectiveDraw, type ForecastInput } from './calculator'
 import type {
-  Loan, LoanProgram, Builder, ForecastSettings, NewOriginationEntry, AAndDLoan,
+  Loan, LoanProgram, Builder, ForecastSettings, NewOriginationEntry, AAndDLoan, LandBucketProject,
 } from './types'
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
@@ -812,5 +812,90 @@ describe('current-month originations prorate by today, in every month', () => {
     expect(s2.forecast_scale).toBe(0)
     // Only the this-month loan contributes, at its unelapsed share.
     expect(r.months[0].a_and_d_planned).toBeCloseTo(s1.months[0].starting_balance * frac, 0)
+  })
+})
+
+// ─── Payoffs are the balance that leaves, not face ───────────────────────────
+
+describe('payoffs', () => {
+  const partlyDrawn = (over: Partial<Loan> = {}): Loan => ({
+    borrower: 'Acme Homes', loan_number: 'L-1', loan_program: 'SFR Construction',
+    original_loan_amount: 500_000, loan_funded_date: `${monthKey(-4)}-01`,
+    current_loan_due_date: `${monthKey(3)}-01`,
+    current_loan_amount: 500_000,          // commitment (face)
+    loan_amount_disbursed: 300_000,        // what's actually drawn
+    loan_amount_remaining: 200_000, interest_reserve_balance: 0,
+    current_interest_rate: 0.06, interest_accrued_mtd: 0,
+    project_name: null, unit_name: null, development_name: null, subdivision_name: null,
+    projected_balance: 500_000, loan_type: 'SFR', number_of_lots: 1, release_period_months: 12,
+    ...over,
+  })
+
+  it('pays an existing loan off at its drawn balance, not its commitment', () => {
+    const r = runForecast(baseInput({ loans: [partlyDrawn()], settings: { ...SETTINGS, horizon_months: 5 } }))
+    // Matures in month 3: the payoff is the $300K drawn, not the $500K face,
+    // and exactly equals what leaves the Active SFR row that month.
+    expect(r.months[3].payoffs_by_segment.sfr).toBe(300_000)
+    expect(r.months[2].active_sfr - r.months[3].active_sfr).toBe(300_000)
+    expect(r.months.reduce((s, m) => s + m.payoffs_by_segment.sfr, 0)).toBe(300_000)
+  })
+
+  it('pays a cohort off at its drawn balance under the curve, not full commitment', () => {
+    // 10 × $100K = $1M committed, on a curve that draws 5%/month to 60% over
+    // a 12-month term. Starting next month keeps this-month proration out.
+    const program: LoanProgram = { ...SF_PROGRAM, draw_curve: Array(12).fill(0.05), default_term_months: 12 }
+    const r = runForecast(baseInput({
+      loanPrograms: [program],
+      newOriginations: [origination({
+        month: monthKey(1), loan_count: 10, avg_loan_amount: 100_000,
+        total_lots: 10, end_month: monthKey(1),
+      })],
+      settings: { ...SETTINGS, horizon_months: 15 },
+    }))
+    const payoffMonth = 1 + 12
+    expect(Math.round(r.months[payoffMonth].payoffs_by_segment.sfr)).toBe(600_000)
+    // What paid off is what left the forecast.
+    expect(Math.round(r.months[payoffMonth - 1].forecasted_sfr)).toBe(600_000)
+    expect(r.months[payoffMonth].forecasted_sfr).toBe(0)
+  })
+
+  it('does not pay off a this-month cohort the forecast no longer carries', () => {
+    // On the last day of the month the forecast carries 0% of this month's
+    // cohort — it's in the loan report and pays off there. Paying it off
+    // again at term counted it twice.
+    const now = startOfMonth(new Date())
+    const dim = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+    const r = runForecast(baseInput({
+      loanPrograms: [{ ...SF_PROGRAM, draw_curve: [1], default_term_months: 6 }],
+      newOriginations: [origination({ loan_count: 10, avg_loan_amount: 100_000, total_lots: 10, end_month: monthKey(0) })],
+      settings: { ...SETTINGS, horizon_months: 8 },
+      today: `${monthKey(0)}-${dim}`,
+    }))
+    expect(r.months.every(m => m.payoffs_by_segment.sfr === 0)).toBe(true)
+  })
+})
+
+describe('payoffs beside Total Outstanding (Loans)', () => {
+  it('leave out Land-Bucket-driven cohorts, which that total excludes', () => {
+    // A land bucket project selling 2 lots/month spawns vertical SFR loans.
+    // Those cohorts are in total_loans but not in Total Outstanding (Loans),
+    // so the Forecast tab must not show their payoffs next to it.
+    const program: LoanProgram = { ...SF_PROGRAM, draw_curve: [1], default_term_months: 3 }
+    const lb: LandBucketProject = {
+      id: 'lb1', name: 'Willow Creek', builder_id: BUILDER.id, total_lots: 20, lot_price: 50_000,
+      absorption_rate: 2, balance_outstanding: 1_000_000, interest_rate: 0.07,
+      dev_start_date: null, dev_end_date: null, lot_sales_start_date: `${monthKey(0)}-01`,
+      vertical_loan_program_id: program.id, vertical_loan_amount: 300_000,
+      lot_release_schedule: {}, notes: null,
+    }
+    const r = runForecast(baseInput({
+      loanPrograms: [program], landBucketProjects: [lb],
+      settings: { ...SETTINGS, horizon_months: 6 },
+    }))
+    const all   = r.months.reduce((s, m) => s + m.payoffs_by_segment.sfr, 0)
+    const loans = r.months.reduce((s, m) => s + m.payoffs_loans_by_segment.sfr, 0)
+    expect(all).toBeGreaterThan(0)   // LB cohorts do pay off, for cash flow
+    expect(loans).toBe(0)            // but not beside the Loans total
+    expect(r.months.every(m => m.forecasted_sfr === 0)).toBe(true)
   })
 })

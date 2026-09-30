@@ -164,10 +164,20 @@ export interface MonthlyBalance {
   new_originations_amount: number
   payoffs_count: number
   payoffs_amount: number
-  // Per-segment breakdown of payoffs_amount so the Forecast page can filter
-  // the Payoffs column by the product-type chip strip. Includes both imported
-  // loan maturities AND forecasted cohort payoffs at end-of-term.
+  // Per-segment breakdown of payoffs_amount: imported loans maturing plus
+  // every cohort reaching term, each at the drawn balance it leaves with (not
+  // face). Includes Land-Bucket-driven cohorts, matching total_loans.
   payoffs_by_segment: {
+    sfr: number
+    mfr: number
+    and: number
+    raw_land: number
+    finished_lots: number
+    hhh: number
+  }
+  // The same, excluding Land-Bucket-driven cohorts, so it matches Total
+  // Outstanding (Loans). The Forecast tab's Payoffs column reads this.
+  payoffs_loans_by_segment: {
     sfr: number
     mfr: number
     and: number

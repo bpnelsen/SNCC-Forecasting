@@ -31,7 +31,10 @@ function flows(raw: MonthlyBalance, active: Set<FilterKey>) {
     if (!active.has(k)) continue
     newOrigCount  += raw.new_origs_by_segment[k].count
     newOrigAmount += raw.new_origs_by_segment[k].amount
-    payoffsAmount += raw.payoffs_by_segment?.[k] ?? 0
+    // Loans-only payoffs, so the column matches Total Outstanding (Loans):
+    // Land-Bucket-driven cohorts aren't in that total, so their payoffs
+    // don't belong beside it.
+    payoffsAmount += raw.payoffs_loans_by_segment?.[k] ?? 0
   }
   return { newOrigCount, newOrigAmount, payoffsAmount }
 }

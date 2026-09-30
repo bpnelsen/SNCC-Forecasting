@@ -5,13 +5,32 @@ import { addMonths, format, parseISO, differenceInCalendarDays } from 'date-fns'
 import { CreditCard, AlertCircle, Search, Filter } from 'lucide-react'
 import { Loan, LoanType } from '@/lib/types'
 import { formatCurrency } from '@/lib/utils'
+import { ParentCompanyDropdown } from '@/components/ui/ParentCompanyDropdown'
+import { UNASSIGNED_PARENT_KEY } from '@/lib/calculator'
+
+// /api/loans enriches each Loan with parent_id (resolved via the same
+// borrower → parent attribution the engine uses) and parent_name (null
+// for UNASSIGNED). Kept on the page-local response shape so we don't
+// pollute the shared Loan type.
+interface LoanWithParent extends Loan {
+  parent_id?: string
+  parent_name?: string | null
+}
+
+// Calendar months between two month-dates (signed, matches calculator.ts).
+function monthsBetween(from: Date, to: Date): number {
+  return (to.getFullYear() - from.getFullYear()) * 12 +
+         (to.getMonth() - from.getMonth())
+}
 
 // Product-type chips — same look as the dashboard's strip, but scoped to
 // this page. Land Bucket is intentionally absent: no loan_type maps to it.
 type FilterKey = 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh'
 
 const CHIPS: { key: FilterKey; label: string; color: string; types: LoanType[] }[] = [
-  { key: 'sfr',           label: 'SFR',           color: '#58A6FF', types: ['SFR'] },
+  // OTC (One-Time Close) tags ride the SFR chip — its own loan_type so analysts
+  // can spot it in the Type column, but rolled into SFR everywhere else.
+  { key: 'sfr',           label: 'SFR',           color: '#58A6FF', types: ['SFR', 'OTC'] },
   { key: 'mfr',           label: 'MFR',           color: '#D4A853', types: ['MFR'] },
   { key: 'and',           label: 'A&D',           color: '#3FB950', types: ['A&D'] },
   { key: 'raw_land',      label: 'Raw Land',      color: '#8B949E', types: ['RAW_LAND'] },
@@ -20,16 +39,33 @@ const CHIPS: { key: FilterKey; label: string; color: string; types: LoanType[] }
   { key: 'hhh',           label: 'HHH/JV',        color: '#F85149', types: ['HHH', 'UNKNOWN'] },
 ]
 
+// Manual loan_type override options for the Type column dropdown. Shorter
+// display labels keep the cell narrow; the value sent to the API is still
+// the canonical LoanType enum. Order = typical analyst use frequency;
+// UNKNOWN sits at the end as a "couldn't classify" escape hatch.
+const LOAN_TYPE_OPTIONS: { value: LoanType; label: string }[] = [
+  { value: 'SFR',           label: 'SFR' },
+  { value: 'MFR',           label: 'MFR' },
+  { value: 'A&D',           label: 'A&D' },
+  { value: 'RAW_LAND',      label: 'Raw Land' },
+  { value: 'FINISHED_LOTS', label: 'Fin Lots' },
+  { value: 'OTC',           label: 'OTC' },
+  { value: 'HHH',           label: 'HHH/JV' },
+  { value: 'UNKNOWN',       label: 'Unknown' },
+]
+
 // Reverse lookup: loan_type → chip key (for filter membership tests).
 const LOAN_TYPE_TO_CHIP = new Map<LoanType, FilterKey>()
 for (const c of CHIPS) for (const t of c.types) LOAN_TYPE_TO_CHIP.set(t, c.key)
 
 interface LoansResponse {
-  loans: Loan[]
+  loans: LoanWithParent[]
   versionLabel: string
   asOfDate: string | null
   startDate: string
   horizonMonths: number
+  parent_companies?: { id: string; name: string }[]
+  parent_loan_counts?: Record<string, number>
 }
 
 // Linear-ramp balance for a single loan in a given month.
@@ -40,7 +76,25 @@ interface LoansResponse {
 //
 // "projected" is max(projected_balance, current_loan_amount, loan_amount_disbursed)
 // to guard against bad imports where one of those is zero.
+//
+// FINISHED_LOTS exception (matches calculator.ts): caps at current_loan_amount
+// (never pulled up by projected_balance) and pays down by original_loan_amount
+// / release_period_months per month from `today`.
 function loanMonthBalance(loan: Loan, monthDate: Date, today: Date): number {
+  if (loan.current_loan_due_date) {
+    const maturity = parseISO(loan.current_loan_due_date)
+    if (monthDate >= maturity) return 0
+  }
+
+  if (loan.loan_type === 'FINISHED_LOTS') {
+    const startBal = Math.max(loan.current_loan_amount, loan.loan_amount_disbursed, 0)
+    const horizon = loan.release_period_months || 0
+    if (horizon <= 0) return startBal
+    const perMonth = (loan.original_loan_amount || 0) / horizon
+    const i = Math.max(0, monthsBetween(today, monthDate))
+    return Math.max(0, startBal - i * perMonth)
+  }
+
   const start = loan.loan_amount_disbursed
   const projected = Math.max(
     loan.projected_balance,
@@ -52,8 +106,6 @@ function loanMonthBalance(loan: Loan, monthDate: Date, today: Date): number {
   if (!loan.current_loan_due_date) return projected
 
   const maturity = parseISO(loan.current_loan_due_date)
-  if (monthDate >= maturity) return 0
-
   const totalDays = differenceInCalendarDays(maturity, today)
   if (totalDays <= 0) return 0
   const elapsedDays = differenceInCalendarDays(monthDate, today)
@@ -68,6 +120,44 @@ export default function LoansPage() {
   const [error, setError]     = useState<string | null>(null)
   const [filter, setFilter]   = useState('')
   const [active, setActive]   = useState<Set<FilterKey>>(new Set(CHIPS.map(c => c.key)))
+  // null = "All parents" (no filter); non-null Set = explicit selection of
+  // parent_company ids (plus UNASSIGNED_PARENT_KEY for the catch-all).
+  const [selectedParents, setSelectedParents] = useState<Set<string> | null>(null)
+  const [saving, setSaving]   = useState<Set<string>>(new Set())
+
+  // PATCH a single FL release field (number_of_lots | release_period_months)
+  // on blur. Optimistically updates the local cache so the projection columns
+  // recompute immediately; on failure we re-load to drop the bad value.
+  const patchLoan = async (
+    id: string,
+    field: 'number_of_lots' | 'release_period_months' | 'loan_type',
+    value: number | string,
+  ) => {
+    setData(prev => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        loans: prev.loans.map(l => l.id === id ? { ...l, [field]: value } as Loan : l),
+      }
+    })
+    setSaving(s => { const n = new Set(s); n.add(id); return n })
+    try {
+      const res = await fetch(`/api/loans/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: value }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        throw new Error(body?.error || `${res.status} ${res.statusText}`)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save')
+      await load()
+    } finally {
+      setSaving(s => { const n = new Set(s); n.delete(id); return n })
+    }
+  }
 
   const load = async () => {
     setLoading(true); setError(null)
@@ -100,15 +190,22 @@ export default function LoansPage() {
       // out when not all chips are active.
       const chip = LOAN_TYPE_TO_CHIP.get(l.loan_type)
       if (!chip || !active.has(chip)) return false
+      // Parent multi-select gate. null = "all parents" (no-op). Loans without
+      // an attributed parent fall under UNASSIGNED_PARENT_KEY.
+      if (selectedParents !== null) {
+        const pid = l.parent_id ?? UNASSIGNED_PARENT_KEY
+        if (!selectedParents.has(pid)) return false
+      }
       if (!q) return true
       return (
         l.loan_number.toLowerCase().includes(q) ||
         l.borrower.toLowerCase().includes(q) ||
+        (l.parent_name ?? '').toLowerCase().includes(q) ||
         (l.loan_program ?? '').toLowerCase().includes(q) ||
         (l.development_name ?? '').toLowerCase().includes(q)
       )
     })
-  }, [data, filter, active])
+  }, [data, filter, active, selectedParents])
 
   // Per-month grand total across the filtered set.
   const monthTotals = useMemo(() => {
@@ -139,7 +236,7 @@ export default function LoansPage() {
     if (next.has(key)) next.delete(key); else next.add(key)
     setActive(next)
   }
-  const chipsFiltered = active.size < CHIPS.length
+  const chipsFiltered = active.size < CHIPS.length || selectedParents !== null
 
   return (
     <div className="p-6 space-y-4">
@@ -191,25 +288,42 @@ export default function LoansPage() {
           )
         })}
         <div className="flex items-center gap-1 ml-auto">
+          <ParentCompanyDropdown
+            parents={data.parent_companies ?? []}
+            parentLoanCounts={data.parent_loan_counts ?? {}}
+            selected={selectedParents}
+            onChange={setSelectedParents}
+          />
           <button onClick={() => setActive(new Set(CHIPS.map(c => c.key)))} className="btn-ghost text-[10px]">All</button>
           <button onClick={() => setActive(new Set())} className="btn-ghost text-[10px]">None</button>
         </div>
       </div>
 
       <div className="card fade-up fade-up-2">
-        <div className="overflow-x-auto">
+        {/* Fixed 1200px scroll viewport so the table doesn't grow the
+            outer document — long loan books scroll inside the card
+            instead of pushing the chip strip + parent filter off the top
+            of the viewport. */}
+        <div className="overflow-auto max-h-[1200px]">
           <table className="data-table">
-            <thead>
+            <thead className="sticky top-0 z-30 bg-surface">
               <tr>
-                <th className="sticky left-0 z-20 bg-surface">Loan #</th>
+                <th className="sticky left-0 z-40 bg-surface">Loan #</th>
                 <th>Borrower</th>
+                <th className="min-w-[120px]">Parent</th>
                 <th>Program</th>
-                <th>Type</th>
+                <th className="min-w-[88px]">Type</th>
                 <th className="text-right">Original</th>
                 <th className="text-right">Current</th>
                 <th className="text-right">Remaining</th>
                 <th>Funded</th>
                 <th>Maturity</th>
+                <th className="text-right" title="Finished Lots only — number of lots collateralizing the loan">
+                  # Lots
+                </th>
+                <th className="text-right" title="Finished Lots only — months to release all lots (linear paydown)">
+                  Release (mo)
+                </th>
                 {months.map(m => (
                   <th key={m.key} className="text-right">{m.label}</th>
                 ))}
@@ -218,7 +332,7 @@ export default function LoansPage() {
             <tbody>
               {filteredLoans.length === 0 ? (
                 <tr>
-                  <td colSpan={9 + months.length} className="text-center text-xs text-fg-dim py-8">
+                  <td colSpan={12 + months.length} className="text-center text-xs text-fg-dim py-8">
                     {filter || chipsFiltered ? 'No loans match the current filter.' : 'No loans imported.'}
                   </td>
                 </tr>
@@ -228,13 +342,74 @@ export default function LoansPage() {
                     {loan.loan_number}
                   </td>
                   <td className="text-fg">{loan.borrower}</td>
+                  <td className={`text-[10px] ${loan.parent_name ? 'text-fg' : 'text-fg-dim italic'}`}>
+                    {loan.parent_name ?? '—'}
+                  </td>
                   <td className="text-[10px]">{loan.loan_program || '—'}</td>
-                  <td className="text-[10px]">{loan.loan_type}</td>
+                  <td className="text-[10px]">
+                    {loan.id ? (
+                      <select
+                        value={loan.loan_type}
+                        disabled={saving.has(loan.id)}
+                        onChange={e => patchLoan(loan.id!, 'loan_type', e.target.value)}
+                        className="w-full min-w-0 bg-transparent border border-transparent rounded
+                                   px-1 py-0.5 text-[10px] text-fg
+                                   focus:outline-none focus:border-accent focus:bg-bg"
+                      >
+                        {LOAN_TYPE_OPTIONS.map(t => (
+                          <option key={t.value} value={t.value}>{t.label}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      loan.loan_type
+                    )}
+                  </td>
                   <td className="num">{formatCurrency(loan.original_loan_amount, true)}</td>
                   <td className="num">{formatCurrency(loan.current_loan_amount, true)}</td>
                   <td className="num">{formatCurrency(loan.loan_amount_remaining, true)}</td>
                   <td className="text-[10px] font-mono">{loan.loan_funded_date ?? '—'}</td>
                   <td className="text-[10px] font-mono">{loan.current_loan_due_date ?? '—'}</td>
+                  {loan.loan_type === 'FINISHED_LOTS' && loan.id ? (
+                    <>
+                      <td className="num">
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          defaultValue={loan.number_of_lots}
+                          disabled={saving.has(loan.id)}
+                          onBlur={e => {
+                            const n = Math.max(1, Math.floor(Number(e.target.value) || 1))
+                            if (n !== loan.number_of_lots) patchLoan(loan.id!, 'number_of_lots', n)
+                          }}
+                          className="w-14 min-w-0 bg-transparent border border-transparent rounded
+                                     px-1 py-0.5 text-[10px] text-fg text-right
+                                     focus:outline-none focus:border-accent focus:bg-bg"
+                        />
+                      </td>
+                      <td className="num">
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          defaultValue={loan.release_period_months}
+                          disabled={saving.has(loan.id)}
+                          onBlur={e => {
+                            const n = Math.max(0, Math.floor(Number(e.target.value) || 0))
+                            if (n !== loan.release_period_months) patchLoan(loan.id!, 'release_period_months', n)
+                          }}
+                          className="w-14 min-w-0 bg-transparent border border-transparent rounded
+                                     px-1 py-0.5 text-[10px] text-fg text-right
+                                     focus:outline-none focus:border-accent focus:bg-bg"
+                        />
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td className="num text-fg-dim">—</td>
+                      <td className="num text-fg-dim">—</td>
+                    </>
+                  )}
                   {months.map(m => {
                     const bal = loanMonthBalance(loan, m.date, today)
                     const isPostMaturity = !!loan.current_loan_due_date && m.date >= parseISO(loan.current_loan_due_date)
@@ -251,7 +426,7 @@ export default function LoansPage() {
                   <td className="sticky left-0 z-10 bg-accent/10 uppercase text-[10px] tracking-wide">
                     Grand total
                   </td>
-                  <td colSpan={8} className="text-[10px] text-fg-dim">
+                  <td colSpan={11} className="text-[10px] text-fg-dim">
                     {filteredLoans.length} loan{filteredLoans.length === 1 ? '' : 's'}
                     {(filter || chipsFiltered) && ` (filtered from ${data.loans.length})`}
                   </td>
@@ -265,9 +440,15 @@ export default function LoansPage() {
         </div>
       </div>
 
-      <div className="text-[10px] text-fg-dim italic px-1">
-        First month uses each loan's <code>loan_amount_disbursed</code>; later months interpolate linearly toward
-        max(<code>projected_balance</code>, <code>current_loan_amount</code>, <code>loan_amount_disbursed</code>); the maturity month and beyond are zero.
+      <div className="text-[10px] text-fg-dim italic px-1 space-y-0.5">
+        <div>
+          First month uses each loan's <code>loan_amount_disbursed</code>; later months interpolate linearly toward
+          max(<code>projected_balance</code>, <code>current_loan_amount</code>, <code>loan_amount_disbursed</code>); the maturity month and beyond are zero.
+        </div>
+        <div>
+          <strong>Finished Lots / Multi-Lot Lot Loan:</strong> capped at <code>current_loan_amount</code> (never increases) and pays down by
+          <code> original_loan_amount ÷ Release (mo)</code> each month. Set Release to 0 to hold flat until maturity.
+        </div>
       </div>
     </div>
   )

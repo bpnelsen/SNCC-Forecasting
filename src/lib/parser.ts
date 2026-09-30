@@ -1,16 +1,28 @@
 import * as XLSX from 'xlsx'
 import { Loan, LoanType } from './types'
 
-function classifyLoan(program: string, borrower: string, development: string): LoanType {
+function classifyLoan(program: string, _borrower: string, _development: string): LoanType {
   const p = (program || '').toLowerCase()
-  const b = (borrower || '').toLowerCase()
-  const d = (development || '').toLowerCase()
+  // Classification is program-only. Borrower-name overrides (an earlier
+  // "Holmes → HHH/JV" shortcut) were removed: parent-company attribution
+  // owns the borrower→parent mapping now, and the HHH/JV dashboard segment
+  // is sourced strictly from the manual /hhh-jv tab, not from imported loans.
+  //
+  // Rule order matters — earlier rules win. Two known special cases:
+  //   * "Land Acquisition" → RAW_LAND (was hitting UNKNOWN before)
+  //   * "Memorial Investments" → A&D (program-named, not a borrower)
+  //   * "OTC" (One-Time Close) → its own loan_type; rolls into the SFR
+  //     segment for dashboards / charts but keeps an OTC tag on /loans.
+  //     Must beat the generic SFR/construction rules below.
 
-  if (b.includes('holmes') || d.includes('oquirrh')) return 'HHH'
   if (p.includes('multifamily') || p.includes('multi-family') || p.includes(' mf')) return 'MFR'
+  if (p.includes('land acquisition') || p.includes('land aquisition')) return 'RAW_LAND'
   if (p.includes('raw land') || p.includes('raw')) return 'RAW_LAND'
-  if (p.includes('acquisition') || p.includes('a&d') || p.includes('development loan')) return 'A&D'
+  if (p.includes('memorial investments')) return 'A&D'
+  if (p.includes('acquisition') || p.includes('aquisition') ||
+      p.includes('a&d') || p.includes('development loan')) return 'A&D'
   if (p.includes('finished lot') || p.includes('lot loan')) return 'FINISHED_LOTS'
+  if (p.includes('otc')) return 'OTC'
   if (
     p.includes('single family') || p.includes('sfr') ||
     p.includes('residential construction') || p.includes('construction')
@@ -197,6 +209,10 @@ export function parseCurrentReportWithDiagnostics(
       subdivision_name:         col.subdivision >= 0 ? String(row[col.subdivision] || '').trim() || null : null,
       projected_balance:        projected,
       loan_type:                classifyLoan(program, borrower, development),
+      // Defaults — overridden per-loan from the /loans page for FL loans.
+      // DB columns default to the same values for legacy rows.
+      number_of_lots:           1,
+      release_period_months:    12,
     })
   }
 

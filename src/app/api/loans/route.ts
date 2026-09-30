@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
+import { UNASSIGNED_PARENT_KEY } from '@/lib/calculator'
 
 // Next 14 statically caches GET route handlers by default. Force-dynamic so
 // DB writes are reflected immediately on Vercel without a redeploy.
@@ -34,19 +35,67 @@ export async function GET() {
       .eq('is_active', true)
       .maybeSingle()
 
-    const { data: loans, error: le } = await sb
-      .from('loans')
-      .select('*')
-      .eq('version_id', version.id)
-
+    // Loans + parent attribution tables in parallel. Parent resolution
+    // mirrors calculator.ts:638-651 — explicit borrower→parent overrides
+    // win, then patterns, then UNASSIGNED.
+    const [
+      { data: loans, error: le },
+      { data: parents },
+      { data: patterns },
+      { data: mappings },
+    ] = await Promise.all([
+      sb.from('loans').select('*').eq('version_id', version.id),
+      sb.from('parent_companies').select('id, name'),
+      sb.from('parent_company_patterns').select('parent_company_id, pattern'),
+      sb.from('borrower_parent_mapping').select('borrower, parent_company_id'),
+    ])
     if (le) throw le
 
+    const parentsList = parents ?? []
+    const overrides = new Map(
+      (mappings ?? []).map(m => [m.borrower as string, m.parent_company_id as string]),
+    )
+    const patternList = (patterns ?? []).map(p => ({
+      parentId: p.parent_company_id as string,
+      pattern: (p.pattern as string).toLowerCase(),
+    }))
+    const nameById = new Map(parentsList.map(p => [p.id as string, p.name as string]))
+
+    // Memoize per-borrower so the resolution loop is O(distinct borrowers),
+    // not O(loans × patterns).
+    const parentByBorrower = new Map<string, string>()
+    const resolve = (borrower: string | null | undefined): string => {
+      if (!borrower) return UNASSIGNED_PARENT_KEY
+      const cached = parentByBorrower.get(borrower)
+      if (cached) return cached
+      const explicit = overrides.get(borrower)
+      if (explicit) { parentByBorrower.set(borrower, explicit); return explicit }
+      const hay = borrower.toLowerCase()
+      const match = patternList.find(p => p.pattern.length > 0 && hay.includes(p.pattern))
+      const id = match ? match.parentId : UNASSIGNED_PARENT_KEY
+      parentByBorrower.set(borrower, id)
+      return id
+    }
+
+    const parentLoanCounts: Record<string, number> = {}
+    const enrichedLoans = (loans ?? []).map(l => {
+      const pid = resolve(l.borrower as string | null)
+      parentLoanCounts[pid] = (parentLoanCounts[pid] ?? 0) + 1
+      return {
+        ...l,
+        parent_id: pid,
+        parent_name: pid === UNASSIGNED_PARENT_KEY ? null : (nameById.get(pid) ?? null),
+      }
+    })
+
     return NextResponse.json({
-      loans: loans ?? [],
+      loans: enrichedLoans,
       versionLabel: version.label,
       asOfDate: version.as_of_date,
       startDate: settings?.start_date ?? new Date().toISOString().split('T')[0],
       horizonMonths: settings?.horizon_months ?? 17,
+      parent_companies: parentsList,
+      parent_loan_counts: parentLoanCounts,
     })
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 })

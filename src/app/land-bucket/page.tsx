@@ -44,21 +44,40 @@ export default function LandBucketPage() {
   const [busy, setBusy]         = useState(false)
   const [msg, setMsg]           = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
 
+  // Always returns a meaningful string — never "[object Object]" or
+  // "Unexpected end of JSON input" from a non-JSON / empty error body.
+  async function readError(r: Response, fb: string): Promise<string> {
+    const text = await r.text().catch(() => '')
+    let parsed: unknown = null
+    try { parsed = text ? JSON.parse(text) : null } catch { /* keep raw */ }
+    const err = (parsed && typeof parsed === 'object' && 'error' in parsed)
+      ? (parsed as { error: unknown }).error : null
+    if (typeof err === 'string' && err.trim()) return err
+    if (err && typeof err === 'object') return JSON.stringify(err)
+    if (text) return `${r.status} ${r.statusText || fb}: ${text.slice(0, 300)}`
+    return `${r.status} ${r.statusText || fb}`
+  }
+
   const load = async () => {
-    setLoading(true)
+    setLoading(true); setMsg(null)
     try {
       const [p, b, lp, fc] = await Promise.all([
-        fetch('/api/land-bucket-projects').then(r => r.json()),
-        fetch('/api/builders').then(r => r.json()),
-        fetch('/api/loan-programs').then(r => r.json()),
+        fetch('/api/land-bucket-projects', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/builders',              { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/loan-programs',         { cache: 'no-store' }).then(r => r.json()),
         // Forecast is best-effort — a bad import or missing config shouldn't
         // block the project editor. Empty schedule just hides the projection.
-        fetch('/api/calculate').then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch('/api/calculate', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null),
       ])
       setProjects(Array.isArray(p) ? p : [])
       setBuilders(Array.isArray(b) ? b : [])
       setPrograms(Array.isArray(lp) ? lp : [])
       setForecast(fc && !fc.error ? fc : null)
+    } catch (e) {
+      // Without this catch, a failed fetch silently rendered an empty page —
+      // the project editor would open with no builders / programs and saves
+      // would look broken. Surface the real error so it's diagnosable.
+      setMsg({ type: 'err', text: e instanceof Error ? e.message : 'Failed to load land bucket data' })
     } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
@@ -67,13 +86,17 @@ export default function LandBucketPage() {
     if (!editing) return
     setBusy(true); setMsg(null)
     try {
-      const url    = editing.id ? `/api/land-bucket-projects/${editing.id}` : '/api/land-bucket-projects'
-      const method = editing.id ? 'PUT' : 'POST'
+      // POST for both create AND update — Vercel rejects PUT with 405 on some
+      // setups (we hit that on assumptions/builders/HHH-JV/A&D already). The
+      // [id] route now exports a POST handler that does the update.
+      const url = editing.id
+        ? `/api/land-bucket-projects/${editing.id}`
+        : '/api/land-bucket-projects'
       const res = await fetch(url, {
-        method, headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editing),
       })
-      if (!res.ok) throw new Error((await res.json()).error || 'Save failed')
+      if (!res.ok) throw new Error(await readError(res, 'Save failed'))
       setMsg({ type: 'ok', text: editing.id ? 'Project updated.' : 'Project created.' })
       setEditing(null)
       await load()
@@ -87,7 +110,7 @@ export default function LandBucketPage() {
     setBusy(true); setMsg(null)
     try {
       const res = await fetch(`/api/land-bucket-projects/${p.id}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error((await res.json()).error || 'Delete failed')
+      if (!res.ok) throw new Error(await readError(res, 'Delete failed'))
       setMsg({ type: 'ok', text: `"${p.name}" deleted.` })
       await load()
     } catch (e) {
@@ -114,7 +137,7 @@ export default function LandBucketPage() {
   if (loading) return <div className="p-6 text-fg-dim text-sm">Loading…</div>
 
   return (
-    <div className="p-6 space-y-6 max-w-6xl">
+    <div className="p-6 space-y-6 max-w-[1227px]">
       <div className="flex items-center justify-between fade-up fade-up-1">
         <div>
           <h1 className="text-lg font-medium text-fg-strong flex items-center gap-2">
@@ -605,10 +628,12 @@ function BuilderGroup({
             </td>
             <td>{lp?.name ?? <span className="text-fg-dim">—</span>}</td>
             <td className="text-[10px] font-mono">{p.lot_sales_start_date ?? '—'}</td>
-            <td className="flex gap-1">
-              <button onClick={() => onEdit(p)} className="btn-ghost"><Pencil className="w-3 h-3" /></button>
-              <button onClick={() => onDelete(p)} disabled={busy}
-                      className="btn-ghost text-danger"><Trash2 className="w-3 h-3" /></button>
+            <td>
+              <div className="flex gap-1 justify-end">
+                <button onClick={() => onEdit(p)} className="btn-ghost" title="Edit"><Pencil className="w-3 h-3" /></button>
+                <button onClick={() => onDelete(p)} disabled={busy}
+                        className="btn-ghost text-danger" title="Delete"><Trash2 className="w-3 h-3" /></button>
+              </div>
             </td>
           </tr>
         )

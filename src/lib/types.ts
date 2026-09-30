@@ -1,4 +1,4 @@
-export type LoanType = 'SFR' | 'MFR' | 'RAW_LAND' | 'A&D' | 'FINISHED_LOTS' | 'HHH' | 'UNKNOWN'
+export type LoanType = 'SFR' | 'MFR' | 'RAW_LAND' | 'A&D' | 'FINISHED_LOTS' | 'HHH' | 'OTC' | 'UNKNOWN'
 
 export interface Loan {
   id?: string
@@ -21,6 +21,13 @@ export interface Loan {
   subdivision_name: string | null
   projected_balance: number
   loan_type: LoanType
+  // Finished Lots / Multi-Lot Lot Loan release rule. Defaults: 1 lot,
+  // 12-month release horizon. Engine uses these only for loan_type ===
+  // 'FINISHED_LOTS' (calculator.ts): the loan is capped at current_loan_amount
+  // (never projected upward) and pays down by original_loan_amount /
+  // release_period_months per month, floored at 0 and zeroed past maturity.
+  number_of_lots: number
+  release_period_months: number
 }
 
 export interface CurrentReportVersion {
@@ -92,6 +99,22 @@ export interface MonthlyBalance {
   outstanding_raw_land: number
   outstanding_finished_lots: number
   outstanding_hhh: number
+  // Active imported-loan portfolio drawn balance per segment. = sumExistingOut(
+  // loansByType.<SEG>) — purely the imported book of business, decaying at
+  // maturity. No new cohorts (LB-driven or scheduled) included. Used by the
+  // dashboard Monthly Summary so its per-segment rows are clean of cohort
+  // double-counting. hhh has no imported contribution (migration 017
+  // reclassified everything), so it isn't surfaced here.
+  active_sfr: number
+  active_mfr: number
+  active_and: number
+  active_raw_land: number
+  active_finished_lots: number
+  // Sum of the planned A&D loans' contribution (initial_balance → draw →
+  // release lifecycle) at this month, across every loan on /a-and-d. Not
+  // included in active_<seg> or forecasted_<seg> — surfaced separately so
+  // the Dashboard can show "Forecasted A&D" = forecasted_and + this.
+  a_and_d_planned: number
   variance: number
   new_originations_sfr: number
   new_originations_mfr: number
@@ -141,6 +164,17 @@ export interface MonthlyBalance {
   new_originations_amount: number
   payoffs_count: number
   payoffs_amount: number
+  // Per-segment breakdown of payoffs_amount so the Forecast page can filter
+  // the Payoffs column by the product-type chip strip. Includes both imported
+  // loan maturities AND forecasted cohort payoffs at end-of-term.
+  payoffs_by_segment: {
+    sfr: number
+    mfr: number
+    and: number
+    raw_land: number
+    finished_lots: number
+    hhh: number
+  }
   cash_flow: number
 }
 
@@ -176,10 +210,80 @@ export interface ForecastResult {
   // '__none__' = unassigned. The dashboard renders the dropdown from these.
   parent_companies: Array<{ id: string; name: string }>
   parent_loan_counts: Record<string, number>
+  // Active imported-loan counts per segment, for the Current Breakdown
+  // tile's $/# toggle. OTC folds into SFR (matches engine rollup).
+  active_loan_counts: {
+    sfr: number
+    mfr: number
+    and: number
+    raw_land: number
+    finished_lots: number
+  }
+  // Same per parent so the # view respects the parent filter.
+  // Key '__none__' = unassigned, matching parent_loan_counts.
+  active_loan_counts_by_parent: Record<string, {
+    sfr: number
+    mfr: number
+    and: number
+    raw_land: number
+    finished_lots: number
+  }>
   // Imported A&D loans (loan_type === 'A&D' from the Current Report) projected
   // flat-until-maturity. Surfaced so the A&D tab can show them alongside
   // forward-planned A&D loans without changing how the engine values them.
   imported_a_and_d_schedules: AAndDLoanSchedule[]
+  // Per-origination-project per-month detail used by the Forecast page's
+  // Detailed view. Each entry groups every loan cohort (LB-driven verticals
+  // + scheduled /originations entries) under its source project so the user
+  // can see counts and drawn balance broken out development-by-development.
+  new_origination_projects: OriginationProjectDetail[]
+  // Diagnostic fields surfaced for the dashboard's Reconciliation panel.
+  // Lets the UI explain why some identities may not balance to the cent.
+  reconciliation: {
+    // Fraction of the current calendar month still ahead of as_of_date
+    // (Truth 4). 0.5 means import was at the half-way point. month-0
+    // Forecasted SFR/MFR is scaled by this.
+    month_zero_fraction: number
+    // Σ loan_amount_disbursed across imported loans whose maturity date is
+    // strictly before the as_of_date. These contribute to the Active Loan
+    // (Outstanding) tile (sumDisbursed has no maturity gate) but NOT to
+    // m.active_<seg> at month 0 (projectExistingLoanOutstanding zeroes
+    // matured loans). That delta explains "why tile > Monthly Summary".
+    matured_disbursed: number
+    // Δ between sumExistingOut(FL loans) at month 0 and sumDisbursed(FL).
+    // FL loans where current_loan_amount > loan_amount_disbursed start the
+    // engine projection above their disbursed amount; the dashboard tile
+    // uses disbursed flat. Usually small but documented for traceability.
+    fl_basis_delta: number
+  }
+}
+
+export type OriginationSegment = 'sfr' | 'mfr' | 'raw_land' | 'and' | 'finished_lots' | 'hhh'
+
+export interface OriginationProjectMonth {
+  // Loans started this month for this project.
+  count: number
+  // Committed $ for loans started this month — count × avg loan amount,
+  // summed across every cohort whose origination_month_idx == this month.
+  committed_amount: number
+  // Drawn balance (running, decays at term) of every loan from this project
+  // at this month. Same math as the engine's lot-origination balance curve.
+  outstanding: number
+}
+
+export interface OriginationProjectDetail {
+  project_id: string
+  project_name: string
+  // 'land_bucket' = vertical loans spawned when a Land Bucket project sells a
+  // lot. 'scheduled' = /originations tab entries.
+  source: 'land_bucket' | 'scheduled'
+  segment: OriginationSegment
+  builder_name: string | null
+  // Total approved/committed loan amount across every cohort for this
+  // project — Σ (count × max_amount_per_loan). Constant for the project; the
+  // Detailed view replays it across every month column for visual alignment.
+  total_loan_amount: number
+  months: OriginationProjectMonth[]
 }
 
 // ─── Modular assumption entities (from migration 002) ───────────────────────
@@ -293,6 +397,14 @@ export interface ByParentSegmentBalance {
   outstanding_raw_land: number
   outstanding_finished_lots: number
   outstanding_hhh: number
+  // Active imported-loan drawn balance per segment for this parent.
+  // = sumExistingOut on the parent's loan slot. Mirrors MonthlyBalance
+  // .active_<seg> at the parent slice.
+  active_sfr: number
+  active_mfr: number
+  active_and: number
+  active_raw_land: number
+  active_finished_lots: number
   // Forecasted new-origination cohort balances (builder → parent)
   forecasted_sfr: number
   forecasted_mfr: number
@@ -304,6 +416,26 @@ export interface ByParentSegmentBalance {
   land_bucket: number       // sum of LB project starting_balance under this parent
   hhh_jv_balance: number    // sum of HHH/JV project balance under this parent (folds into hhh)
   a_and_d_planned: number   // sum of planned A&D loan balance under this parent (folds into and)
+}
+
+// Committee-approved loans that haven't closed yet. Free-form pipeline tracker
+// rendered by /approved. "Days left" is computed in the UI as
+// lc_approval_expiration - today, not stored. See migration 016.
+export type ApprovedLoanType   = 'Vertical' | 'A&D' | 'Finished Lots' | 'Land' | 'Other'
+export type ApprovedLoanStatus = 'Open' | 'Closed'
+
+export interface ApprovedLoan {
+  id: string
+  loan_type: ApprovedLoanType
+  date_approved: string | null
+  borrower_project_name: string
+  lc_approval_expiration: string | null
+  status: ApprovedLoanStatus
+  date_completed: string | null
+  disposition_notes: string | null
+  next_steps_notes: string | null
+  loan_amount: number
+  sort_order: number
 }
 
 export interface AAndDLoan {

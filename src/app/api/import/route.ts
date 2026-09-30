@@ -2,6 +2,21 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import { parseCurrentReportWithDiagnostics } from '@/lib/parser'
 
+// Supabase / PostgREST errors are plain objects, so `String(e)` collapses
+// them to "[object Object]". Surface message / details / hint / code so the
+// import page tells the user something useful (missing column, FK violation,
+// etc.) instead of swallowing the cause.
+function errMessage(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (e && typeof e === 'object') {
+    const o = e as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown }
+    const parts = [o.message, o.details, o.hint, o.code].filter(Boolean).map(String)
+    if (parts.length) return parts.join(' · ')
+    try { return JSON.stringify(e) } catch { /* fall through */ }
+  }
+  return String(e)
+}
+
 export async function POST(req: NextRequest) {
   try {
     const fd    = await req.formData()
@@ -66,6 +81,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ version_id: version.id, loan_count: loans.length, label })
   } catch (e) {
     console.error('/api/import error:', e)
-    return NextResponse.json({ error: String(e) }, { status: 500 })
+    return NextResponse.json({ error: errMessage(e) }, { status: 500 })
   }
 }

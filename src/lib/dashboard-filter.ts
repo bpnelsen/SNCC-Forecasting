@@ -186,6 +186,7 @@ function sliceActiveChange(
   return {
     past_maturity: slice(change?.past_maturity),
     maturing:      slice(change?.maturing),
+    draws:         slice(change?.draws),
     paydown:       slice(change?.paydown),
   }
 }

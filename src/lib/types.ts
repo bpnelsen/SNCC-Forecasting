@@ -200,6 +200,8 @@ export interface ActiveChange {
   past_maturity: ActiveChangeBySegment
   // Imported loans reaching maturity during the previous month — negative.
   maturing: ActiveChangeBySegment
+  // Existing loans drawing up along their program's draw curve — positive.
+  draws: ActiveChangeBySegment
   // Partial changes that aren't a payoff: Finished Lots paying down as lots
   // release — usually negative.
   paydown: ActiveChangeBySegment

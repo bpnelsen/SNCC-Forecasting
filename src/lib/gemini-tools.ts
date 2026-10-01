@@ -259,12 +259,18 @@ Domain context (these are TRUE rules, not preferences):
 - Loan segments: SFR (single-family construction), MFR (multifamily), A&D
   (acquisition + development), Raw Land, Finished Lots, OTC (one-time close —
   rolls into SFR for dashboard rollups but kept as its own loan_type).
-- "Active <segment>" = sum of loan_amount_disbursed for imported loans of
-  that type, decaying to 0 at each loan's current_loan_due_date.
+- "Active <segment>" = drawn balance of imported loans of that type. Month 0
+  is loan_amount_disbursed (ties to the Active Loan (Outstanding) tile). Each
+  later month, a loan draws up along its program's draw curve — placed by its
+  loan_funded_date — toward loan amount × the curve's maximum, reaching it
+  when the curve ends, and drops to 0 at its current_loan_due_date. Finished
+  Lots pay down as lots release instead. Loans already past maturity stay in
+  month 0 and all drop out in month 1.
 - "Forecasted SFR/MFR" = drawn balance of new-origination cohorts SCHEDULED
   on the /originations tab — NOT including Land Bucket-spawned verticals.
-  Month 0 is prorated by remaining-month fraction (Truth 4); future months
-  use the full draw curve.
+  A cohort starting this month is carried only for the share of the month
+  still ahead of today, in every month of its life (the rest has funded and
+  is in the loan report); later cohorts are carried in full.
 - HHH/JV is an EQUITY investment sourced from the manual /hhh-jv tab — it
   is NOT a loan. Included in Total Outstanding (All) but excluded from
   Total Outstanding (Loans).

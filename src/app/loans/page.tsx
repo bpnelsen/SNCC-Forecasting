@@ -1,12 +1,12 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { addMonths, format, parseISO, differenceInCalendarDays } from 'date-fns'
+import { addMonths, format, parseISO } from 'date-fns'
 import { CreditCard, AlertCircle, Search, Filter } from 'lucide-react'
-import { Loan, LoanType } from '@/lib/types'
+import { Loan, LoanType, LoanProgram } from '@/lib/types'
 import { formatCurrency } from '@/lib/utils'
 import { ParentCompanyDropdown } from '@/components/ui/ParentCompanyDropdown'
-import { UNASSIGNED_PARENT_KEY } from '@/lib/calculator'
+import { UNASSIGNED_PARENT_KEY, projectExistingLoanOutstanding } from '@/lib/calculator'
 
 // /api/loans enriches each Loan with parent_id (resolved via the same
 // borrower → parent attribution the engine uses) and parent_name (null
@@ -15,12 +15,6 @@ import { UNASSIGNED_PARENT_KEY } from '@/lib/calculator'
 interface LoanWithParent extends Loan {
   parent_id?: string
   parent_name?: string | null
-}
-
-// Calendar months between two month-dates (signed, matches calculator.ts).
-function monthsBetween(from: Date, to: Date): number {
-  return (to.getFullYear() - from.getFullYear()) * 12 +
-         (to.getMonth() - from.getMonth())
 }
 
 // Product-type chips — same look as the dashboard's strip, but scoped to
@@ -64,55 +58,15 @@ interface LoansResponse {
   asOfDate: string | null
   startDate: string
   horizonMonths: number
+  loanPrograms?: LoanProgram[]
   parent_companies?: { id: string; name: string }[]
   parent_loan_counts?: Record<string, number>
 }
 
-// Linear-ramp balance for a single loan in a given month.
-//
-// today    -> loan_amount_disbursed
-// maturity -> projected_balance (treated as the loan's end-state target)
-// After the maturity month: 0.
-//
-// "projected" is max(projected_balance, current_loan_amount, loan_amount_disbursed)
-// to guard against bad imports where one of those is zero.
-//
-// FINISHED_LOTS exception (matches calculator.ts): caps at current_loan_amount
-// (never pulled up by projected_balance) and pays down by original_loan_amount
-// / release_period_months per month from `today`.
-function loanMonthBalance(loan: Loan, monthDate: Date, today: Date): number {
-  if (loan.current_loan_due_date) {
-    const maturity = parseISO(loan.current_loan_due_date)
-    if (monthDate >= maturity) return 0
-  }
-
-  if (loan.loan_type === 'FINISHED_LOTS') {
-    const startBal = Math.max(loan.current_loan_amount, loan.loan_amount_disbursed, 0)
-    const horizon = loan.release_period_months || 0
-    if (horizon <= 0) return startBal
-    const perMonth = (loan.original_loan_amount || 0) / horizon
-    const i = Math.max(0, monthsBetween(today, monthDate))
-    return Math.max(0, startBal - i * perMonth)
-  }
-
-  const start = loan.loan_amount_disbursed
-  const projected = Math.max(
-    loan.projected_balance,
-    loan.current_loan_amount,
-    loan.loan_amount_disbursed,
-  )
-
-  // No maturity date — hold projected balance through the horizon.
-  if (!loan.current_loan_due_date) return projected
-
-  const maturity = parseISO(loan.current_loan_due_date)
-  const totalDays = differenceInCalendarDays(maturity, today)
-  if (totalDays <= 0) return 0
-  const elapsedDays = differenceInCalendarDays(monthDate, today)
-  const fraction = Math.max(0, Math.min(1, elapsedDays / totalDays))
-
-  return start + (projected - start) * fraction
-}
+// Each loan's balance per month comes from the forecast engine's own
+// projectExistingLoanOutstanding, so this grid matches the Dashboard's Active
+// rows: disbursed this month, then drawing up along the program's draw curve
+// to its maximum until maturity (Finished Lots pay down instead).
 
 export default function LoansPage() {
   const [data, setData]       = useState<LoansResponse | null>(null)
@@ -210,9 +164,10 @@ export default function LoansPage() {
   // Per-month grand total across the filtered set.
   const monthTotals = useMemo(() => {
     if (!data || months.length === 0) return []
-    const today = parseISO(data.startDate)
+    const start = parseISO(data.startDate)
+    const programs = data.loanPrograms ?? []
     return months.map(m => filteredLoans.reduce(
-      (s, l) => s + loanMonthBalance(l, m.date, today), 0,
+      (s, l) => s + projectExistingLoanOutstanding(l, m.date, start, programs), 0,
     ))
   }, [filteredLoans, months, data])
 
@@ -229,7 +184,8 @@ export default function LoansPage() {
   )
   if (!data) return null
 
-  const today = parseISO(data.startDate)
+  const start = parseISO(data.startDate)
+  const programs = data.loanPrograms ?? []
 
   const toggle = (key: FilterKey) => {
     const next = new Set(active)
@@ -247,7 +203,7 @@ export default function LoansPage() {
             Loans
           </h1>
           <p className="text-xs text-fg-dim mt-0.5">
-            {data.versionLabel} · {data.loans.length} loans · projected balances ramp linearly from disbursed to projected, zero at maturity
+            {data.versionLabel} · {data.loans.length} loans · balances draw up along each program’s draw curve until it ends or the loan matures
           </p>
         </div>
         <div className="relative">
@@ -411,7 +367,7 @@ export default function LoansPage() {
                     </>
                   )}
                   {months.map(m => {
-                    const bal = loanMonthBalance(loan, m.date, today)
+                    const bal = projectExistingLoanOutstanding(loan, m.date, start, programs)
                     const isPostMaturity = !!loan.current_loan_due_date && m.date >= parseISO(loan.current_loan_due_date)
                     return (
                       <td key={m.key} className={`num ${isPostMaturity ? 'text-fg-dim' : ''}`}>
@@ -442,8 +398,9 @@ export default function LoansPage() {
 
       <div className="text-[10px] text-fg-dim italic px-1 space-y-0.5">
         <div>
-          First month uses each loan&rsquo;s <code>loan_amount_disbursed</code>; later months interpolate linearly toward
-          max(<code>projected_balance</code>, <code>current_loan_amount</code>, <code>loan_amount_disbursed</code>); the maturity month and beyond are zero.
+          This month uses each loan&rsquo;s <code>loan_amount_disbursed</code>. Later months draw up along the loan program&rsquo;s
+          draw curve — placed by the loan&rsquo;s origination date — toward loan amount × the curve&rsquo;s maximum, reaching it when the
+          curve ends; the maturity month and beyond are zero. Finished Lots pay down as lots release. Same figures as the Dashboard.
         </div>
         <div>
           <strong>Finished Lots / Multi-Lot Lot Loan:</strong> capped at <code>current_loan_amount</code> (never increases) and pays down by

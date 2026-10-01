@@ -54,6 +54,7 @@ export function monthBridge(prev: MonthlyBalance, curr: MonthlyBalance) {
   const parts = {
     pastMaturity:   rowSum(c?.past_maturity),
     maturing:       rowSum(c?.maturing),
+    draws:          rowSum(c?.draws),
     paydown:        rowSum(c?.paydown),
     forecastedSfr:  curr.forecasted_sfr - prev.forecasted_sfr,
     forecastedMfr:  curr.forecasted_mfr - prev.forecasted_mfr,

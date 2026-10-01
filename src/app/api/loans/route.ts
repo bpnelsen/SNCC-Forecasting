@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import { UNASSIGNED_PARENT_KEY } from '@/lib/calculator'
 import { fetchAll } from '@/lib/fetch-all'
-import type { Loan } from '@/lib/types'
+import type { Loan, LoanProgram } from '@/lib/types'
+import { format, startOfMonth } from 'date-fns'
 
 // Kept explicit: Next 15 no longer caches GET route handlers by default, but
 // stating it means a future default change can't silently start serving a
@@ -46,11 +47,15 @@ export async function GET() {
       { data: parents },
       { data: patterns },
       { data: mappings },
+      { data: programs },
     ] = await Promise.all([
       fetchAll<Loan>(sb.from('loans').select('*').eq('version_id', version.id)),
       sb.from('parent_companies').select('id, name'),
       sb.from('parent_company_patterns').select('parent_company_id, pattern'),
       sb.from('borrower_parent_mapping').select('borrower, parent_company_id'),
+      // The draw curves existing loans draw up along — the same rows the
+      // forecast engine reads, so this tab's projection matches the Dashboard.
+      sb.from('loan_programs').select('*'),
     ])
     if (le) throw le
 
@@ -95,7 +100,15 @@ export async function GET() {
       loans: enrichedLoans,
       versionLabel: version.label,
       asOfDate: version.as_of_date,
-      startDate: settings?.start_date ?? new Date().toISOString().split('T')[0],
+      // The engine never starts before the current month (runForecast clamps
+      // a stale forecast_settings.start_date forward). Send the same month so
+      // this tab's columns line up with the Dashboard's.
+      startDate: (() => {
+        const thisMonth = format(startOfMonth(new Date()), 'yyyy-MM-dd')
+        const stored = settings?.start_date ? String(settings.start_date).slice(0, 10) : null
+        return stored && stored > thisMonth ? stored : thisMonth
+      })(),
+      loanPrograms: (programs ?? []) as LoanProgram[],
       horizonMonths: settings?.horizon_months ?? 17,
       parent_companies: parentsList,
       parent_loan_counts: parentLoanCounts,

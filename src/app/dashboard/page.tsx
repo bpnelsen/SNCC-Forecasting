@@ -574,6 +574,7 @@ function MonthBridge({ prev, curr, parentFiltered }: {
     { label: `Loans already past maturity before ${prev.label}`, value: b.pastMaturity,
       note: `On the books in ${prev.label}, assumed paid off in ${curr.label} — all at once` },
     { label: `Loans maturing in ${prev.label}`, value: b.maturing },
+    { label: 'Existing loans drawing up', value: b.draws, note: 'Along each program’s draw curve, toward its maximum' },
     { label: 'Finished Lots paydown', value: b.paydown, note: 'Lot releases on existing finished-lots loans' },
     { label: 'Forecasted SFR', value: b.forecastedSfr, note: 'New cohorts and draws, less cohorts reaching term' },
     { label: 'Forecasted MFR', value: b.forecastedMfr },

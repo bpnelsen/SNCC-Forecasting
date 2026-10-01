@@ -357,7 +357,12 @@ function projectExistingLoanBalance(
 // that already happened before the forecast start.
 //
 // FINISHED_LOTS: linear paydown rule applies independent of maturity.
-function projectExistingLoanOutstanding(loan: Loan, monthDate: Date, startDate: Date): number {
+export function projectExistingLoanOutstanding(
+  loan: Loan,
+  monthDate: Date,
+  startDate: Date,
+  programs: LoanProgram[] = [],
+): number {
   if (loan.loan_type === 'FINISHED_LOTS') {
     const start = Math.max(loan.loan_amount_disbursed, loan.current_loan_amount, 0)
     const i = monthsBetween(startDate, monthDate)
@@ -370,7 +375,80 @@ function projectExistingLoanOutstanding(loan: Loan, monthDate: Date, startDate: 
     const dueDate = parseISO(loan.current_loan_due_date)
     if (monthDate >= dueDate) return 0
   }
-  return loan.loan_amount_disbursed > 0 ? loan.loan_amount_disbursed : 0
+  const disbursed = loan.loan_amount_disbursed > 0 ? loan.loan_amount_disbursed : 0
+  // Month 0 is the loan report itself, so the Active rows tie the tile.
+  if (isMonthZero) return disbursed
+  const program = drawProgramForLoanType(loan.loan_type, programs)
+  return drawnUpBalance(loan, disbursed, format(monthDate, 'yyyy-MM'), format(startDate, 'yyyy-MM'),
+                        program?.draw_curve ?? null)
+}
+
+// Which loan program's draw curve an imported loan follows, by loan type.
+// Prefers the standard program name for the product type, then any program
+// of that type. Finished Lots pay down instead of drawing; HHH and UNKNOWN
+// imports aren't in the Active rows — neither has a curve.
+const LOAN_TYPE_PRODUCT: Partial<Record<LoanType, ProductType>> = {
+  SFR: 'SF', OTC: 'SF', MFR: 'MF', 'A&D': 'AD', RAW_LAND: 'RAW_LAND',
+}
+const STANDARD_PROGRAM_NAME: Partial<Record<ProductType, string>> = {
+  SF: 'SFR Construction', MF: 'MFR Construction', AD: 'A&D / Development', RAW_LAND: 'Raw Land',
+}
+export function drawProgramForLoanType(type: LoanType, programs: LoanProgram[]): LoanProgram | null {
+  const productType = LOAN_TYPE_PRODUCT[type]
+  if (!productType) return null
+  const candidates = programs.filter(p => p.product_type === productType)
+  return candidates.find(p => p.name === STANDARD_PROGRAM_NAME[productType]) ?? candidates[0] ?? null
+}
+
+// Signed whole-month distance between two YYYY-MM keys (to − from).
+function monthOffset(fromKey: string, toKey: string): number {
+  const [fy, fm] = fromKey.split('-').map(Number)
+  const [ty, tm] = toKey.split('-').map(Number)
+  if (!fy || !fm || !ty || !tm) return 0
+  return (ty - fy) * 12 + (tm - fm)
+}
+
+/**
+ * An existing loan's drawn balance in a future month, drawing up along its
+ * program's draw curve.
+ *
+ * The loan sits at a point on the curve given by its age since origination
+ * (loan_funded_date). Its ceiling is commitment × the curve's maximum — the
+ * curve's total, capped at 100% (a curve summing to 90% tops out at 90%).
+ * From today's actual disbursed amount it draws the rest of the way along the
+ * REMAINING part of the curve, so it reaches the ceiling exactly when the
+ * curve ends, following the curve's shape, and never steps down. A loan
+ * behind schedule catches up over the remaining curve; one ahead draws more
+ * slowly; one already at or past the ceiling holds where it is.
+ *
+ * Held flat at disbursed — the previous behaviour — when there is nothing to
+ * draw along: no origination date, no curve, no commitment, or a curve that
+ * already finished before this month. Maturity is applied by the caller.
+ */
+function drawnUpBalance(
+  loan: Loan,
+  disbursed: number,
+  monthKey: string,
+  startKey: string,
+  curve: number[] | null,
+): number {
+  if (!curve || curve.length === 0 || !loan.loan_funded_date) return disbursed
+  const commitment = loan.current_loan_amount > 0 ? loan.current_loan_amount : (loan.original_loan_amount || 0)
+  if (!(commitment > 0)) return disbursed
+  const curveMax = Math.min(1, curve.reduce((a, b) => a + (Number(b) || 0), 0))
+  const ceiling = commitment * curveMax
+  if (disbursed >= ceiling) return disbursed
+
+  const originKey = loan.loan_funded_date.slice(0, 7)
+  const ageNow = monthOffset(originKey, startKey)
+  const ageThen = monthOffset(originKey, monthKey)
+  if (ageThen <= ageNow) return disbursed
+
+  const drawnByNow = cumulativeDraw(curve, ageNow)   // 0 for a loan funding later
+  const curveLeft = curveMax - drawnByNow
+  if (curveLeft <= 1e-9) return disbursed
+  const progress = Math.min(1, Math.max(0, (cumulativeDraw(curve, ageThen) - drawnByNow) / curveLeft))
+  return disbursed + (ceiling - disbursed) * progress
 }
 
 // HHH/JV project contribution for a given forecast month key ('YYYY-MM').
@@ -1094,7 +1172,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     // Outstanding (drawn) per segment: existing loans valued at disbursed
     // (decays at maturity) + forecasted cohorts (already a drawn balance).
     const sumExistingOut = (loans: Loan[]) =>
-      loans.reduce((s, l) => s + projectExistingLoanOutstanding(l, m.date, startDate), 0)
+      loans.reduce((s, l) => s + projectExistingLoanOutstanding(l, m.date, startDate, input.loanPrograms), 0)
     // Active = imported-loan drawn balance per segment. Memoized so the
     // outstanding_<seg> sums and the MonthlyBalance.active_<seg> exports
     // read the same value.
@@ -1243,7 +1321,10 @@ export function runForecast(input: ForecastInput): ForecastResult {
     // Income: per-loan rate where available, program default for new cohorts
     let yield_active = 0
     for (const loan of input.loans) {
-      const bal = projectExistingLoanBalance(loan, m.date, input.loanPrograms, startDate)
+      // Interest accrues on what's drawn, not on the commitment — and so rises
+      // as the loan draws up. Previously on face (projectExistingLoanBalance),
+      // which charged interest on money never advanced.
+      const bal = projectExistingLoanOutstanding(loan, m.date, startDate, input.loanPrograms)
       const rate = loan.current_interest_rate > 0 ? loan.current_interest_rate : input.settings.default_rate_vertical
       yield_active += bal * rate / 12
     }
@@ -1305,11 +1386,12 @@ export function runForecast(input: ForecastInput): ForecastResult {
     // Only loans that are IN the Active rows count (HHH / UNKNOWN imports are
     // held at 0 there). Components sum exactly to the change in Σ active_<seg>.
     const active_change: ActiveChange = {
-      past_maturity: emptySegRecord(), maturing: emptySegRecord(), paydown: emptySegRecord(),
+      past_maturity: emptySegRecord(), maturing: emptySegRecord(),
+      draws: emptySegRecord(), paydown: emptySegRecord(),
     }
     for (const loan of input.loans) {
       const key = loan.id ?? loan.loan_number
-      const curr = projectExistingLoanOutstanding(loan, m.date, startDate)
+      const curr = projectExistingLoanOutstanding(loan, m.date, startDate, input.loanPrograms)
       const prev = prevExistingBalances.get(key) ?? 0
       const seg = loanTypeToSegment[loan.loan_type]
       const inActiveRows = ACTIVE_ROW_TYPES.has(loan.loan_type)
@@ -1329,6 +1411,8 @@ export function runForecast(input: ForecastInput): ForecastResult {
           const due = loan.current_loan_due_date ? parseISO(loan.current_loan_due_date) : null
           const bucket = due && due < months[0].date ? 'past_maturity' : 'maturing'
           active_change[bucket][seg] -= prev
+        } else if (curr > prev) {
+          active_change.draws[seg] += curr - prev
         } else {
           active_change.paydown[seg] += curr - prev
         }

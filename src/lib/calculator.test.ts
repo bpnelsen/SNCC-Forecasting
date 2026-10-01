@@ -1087,3 +1087,94 @@ describe('month-over-month breakdown', () => {
     expect(r.months.reduce((s, m) => s + m.payoffs_by_segment.hhh, 0)).toBe(400_000)
   })
 })
+
+// ─── Existing loans draw up along their program's draw curve ────────────────
+
+describe('existing loans draw up along the draw curve', () => {
+  // 10-month SFR curve, 10%/month → curve maximum 100%.
+  const CURVE10: LoanProgram = { ...SF_PROGRAM, draw_curve: Array(10).fill(0.1), default_term_months: 12 }
+  const loan = (over: Partial<Loan> = {}): Loan => ({
+    borrower: 'Acme', loan_number: 'L-1', loan_program: 'SFR Construction', original_loan_amount: 500_000,
+    loan_funded_date: `${monthKey(-4)}-10`,          // age 4 now: curve says 50% drawn by now
+    current_loan_due_date: `${monthKey(20)}-01`,
+    current_loan_amount: 500_000, loan_amount_disbursed: 200_000, loan_amount_remaining: 300_000,
+    interest_reserve_balance: 0, current_interest_rate: 0.12, interest_accrued_mtd: 0,
+    project_name: null, unit_name: null, development_name: null, subdivision_name: null,
+    projected_balance: 460_000, loan_type: 'SFR', number_of_lots: 1, release_period_months: 12,
+    ...over,
+  })
+  const run = (l: Loan, program: LoanProgram = CURVE10, horizon = 12) => runForecast(baseInput({
+    loans: [l], loanPrograms: [program], settings: { ...SETTINGS, horizon_months: horizon },
+  }))
+  const series = (r: ReturnType<typeof run>) => r.months.map(m => Math.round(m.active_sfr))
+
+  it('starts at today’s disbursed amount, then draws up to the curve maximum by the end of the curve', () => {
+    const s = series(run(loan()))
+    expect(s[0]).toBe(200_000)                       // the loan report, unchanged
+    // 300K left to draw over the curve's remaining 50% (ages 5–9): 60K a month.
+    expect(s.slice(1, 7)).toEqual([260_000, 320_000, 380_000, 440_000, 500_000, 500_000])
+    expect(Math.max(...s)).toBe(500_000)             // never past commitment × curve max
+    for (let i = 1; i < s.length; i++) expect(s[i]).toBeGreaterThanOrEqual(s[i - 1])
+  })
+
+  it('stops at maturity and pays off the drawn-up balance', () => {
+    const r = run(loan({ current_loan_due_date: `${monthKey(3)}-01` }))
+    const s = series(r)
+    expect(s.slice(0, 4)).toEqual([200_000, 260_000, 320_000, 0])
+    expect(r.months[3].payoffs_loans_by_segment.sfr).toBe(320_000)
+  })
+
+  it('tops out at the curve maximum, not the commitment, when the curve sums under 100%', () => {
+    const NINETY: LoanProgram = { ...CURVE10, draw_curve: Array(10).fill(0.09) }   // 90%
+    const s = series(run(loan(), NINETY))
+    expect(Math.max(...s)).toBe(450_000)
+  })
+
+  it('holds a loan already at or past the curve maximum where it is', () => {
+    expect(series(run(loan({ loan_amount_disbursed: 500_000 }))).every(v => v === 500_000)).toBe(true)
+  })
+
+  it('holds flat when it cannot be placed on the curve', () => {
+    expect(series(run(loan({ loan_funded_date: null }))).every(v => v === 200_000)).toBe(true)
+    // Curve already finished before this month: nothing left to draw along.
+    expect(series(run(loan({ loan_funded_date: `${monthKey(-14)}-01` }))).every(v => v === 200_000)).toBe(true)
+  })
+
+  it('follows the curve from origination for a loan funding later', () => {
+    const s = series(run(loan({ loan_funded_date: `${monthKey(2)}-05`, loan_amount_disbursed: 0 })))
+    // Nothing until it funds; then 10% of $500K per month.
+    expect(s.slice(0, 5)).toEqual([0, 0, 50_000, 100_000, 150_000])
+  })
+
+  it('uses each loan type’s own program curve', () => {
+    const MF: LoanProgram = { ...CURVE10, id: 'prog-mf', name: 'MFR Construction', product_type: 'MF',
+                              draw_curve: Array(5).fill(0.2) }
+    const r = runForecast(baseInput({
+      loans: [loan({ loan_type: 'MFR', loan_funded_date: `${monthKey(-1)}-01` })],
+      loanPrograms: [CURVE10, MF], settings: { ...SETTINGS, horizon_months: 6 },
+    }))
+    // Age 1 on a 5-month MF curve: 40% of curve done, 300K over the remaining 60% → 100K/month.
+    expect(r.months.map(m => Math.round(m.active_mfr))).toEqual([200_000, 300_000, 400_000, 500_000, 500_000, 500_000])
+  })
+
+  it('earns interest on the drawn balance as it draws, not on the commitment', () => {
+    const r = run(loan())
+    expect(r.months[0].yield_active).toBeCloseTo(200_000 * 0.12 / 12, 6)
+    expect(r.months[1].yield_active).toBeCloseTo(260_000 * 0.12 / 12, 6)
+  })
+
+  it('shows the draws in the month-over-month breakdown, which still ties', () => {
+    const r = run(loan())
+    expect(r.months[1].active_change.draws.sfr).toBe(60_000)
+    const months = applyFilter(r.months, ALL_KEYS, null)
+    for (let i = 1; i < months.length; i++) {
+      expect(Math.abs(monthBridge(months[i - 1], months[i]).other)).toBeLessThan(1e-6)
+    }
+  })
+
+  it('leaves Finished Lots paying down rather than drawing', () => {
+    const r = run(loan({ loan_type: 'FINISHED_LOTS', loan_amount_disbursed: 500_000, original_loan_amount: 600_000,
+                         current_loan_amount: 500_000, release_period_months: 12 }))
+    expect(r.months.slice(0, 3).map(m => Math.round(m.active_finished_lots))).toEqual([500_000, 450_000, 400_000])
+  })
+})

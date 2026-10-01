@@ -3,7 +3,8 @@ import { addMonths, format, startOfMonth } from 'date-fns'
 import {
   runForecast, originationsInMonth, effectiveDraw, previewLandBucketProject, type ForecastInput,
 } from './calculator'
-import { totalOutstandingAll } from './summary'
+import { totalOutstandingAll, totalOutstandingLoans, monthBridge } from './summary'
+import { applyFilter, ALL_KEYS, type FilterKey } from './dashboard-filter'
 import type {
   Loan, LoanProgram, Builder, ForecastSettings, NewOriginationEntry, AAndDLoan, LandBucketProject,
 } from './types'
@@ -1020,5 +1021,69 @@ describe('forecast horizon', () => {
     const peakOf = (h: number) => Math.max(...book(h).months.map(m => m.total_all))
     const full = book(24).months.map(m => m.total_all)
     for (const h of [6, 12]) expect(peakOf(h)).toBe(Math.max(...full.slice(0, h)))
+  })
+})
+
+// ─── Why Total Outstanding (Loans) moves month to month ──────────────────────
+
+describe('month-over-month breakdown', () => {
+  const loan = (over: Partial<Loan>): Loan => ({
+    borrower: 'Acme', loan_number: 'L', loan_program: 'SFR', original_loan_amount: 500_000,
+    loan_funded_date: `${monthKey(-6)}-01`, current_loan_due_date: `${monthKey(12)}-01`,
+    current_loan_amount: 500_000, loan_amount_disbursed: 400_000, loan_amount_remaining: 100_000,
+    interest_reserve_balance: 0, current_interest_rate: 0.07, interest_accrued_mtd: 0,
+    project_name: null, unit_name: null, development_name: null, subdivision_name: null,
+    projected_balance: 500_000, loan_type: 'SFR', number_of_lots: 1, release_period_months: 12,
+    ...over,
+  })
+  const BOOK: Loan[] = [
+    loan({ loan_number: 'past-due', current_loan_due_date: `${monthKey(-2)}-15` }),            // already matured
+    loan({ loan_number: 'due-now',  current_loan_due_date: `${monthKey(0)}-20` }),             // matures this month
+    loan({ loan_number: 'later',    current_loan_due_date: `${monthKey(4)}-01`, loan_type: 'MFR' }),
+    loan({ loan_number: 'lots', loan_type: 'FINISHED_LOTS', original_loan_amount: 1_200_000,
+           current_loan_amount: 1_200_000, loan_amount_disbursed: 1_200_000, release_period_months: 12 }),
+    loan({ loan_number: 'hhh', loan_type: 'HHH', current_loan_due_date: `${monthKey(2)}-01` }),
+  ]
+  const run = () => runForecast(baseInput({
+    loans: BOOK,
+    loanPrograms: [{ ...SF_PROGRAM, draw_curve: Array(5).fill(0.2), default_term_months: 6 }],
+    newOriginations: [origination({ loan_count: 2, avg_loan_amount: 300_000, total_lots: 12 })],
+    aAndDLoans: [aAndDLoan({ origination_date: `${monthKey(2)}-01` })],
+    settings: { ...SETTINGS, horizon_months: 10 },
+  }))
+
+  it('puts already-matured loans in month 1 as one cliff, separate from this month’s maturities', () => {
+    const r = run()
+    // Both still on the books in month 0, so the rows tie the tile.
+    expect(r.months[0].active_sfr).toBe(800_000 + 0)
+    const c = r.months[1].active_change
+    expect(c.past_maturity.sfr).toBe(-400_000)   // 'past-due'
+    expect(c.maturing.sfr).toBe(-400_000)        // 'due-now'
+    expect(r.months.slice(2).every(m => m.active_change.past_maturity.sfr === 0)).toBe(true)
+    expect(r.months[1].active_change.paydown.finished_lots).toBe(-100_000)   // 1.2M / 12
+  })
+
+  it('adds up exactly to the change in Total Outstanding (Loans), every month', () => {
+    const months = applyFilter(run().months, ALL_KEYS, null)
+    for (let i = 1; i < months.length; i++) {
+      const b = monthBridge(months[i - 1], months[i])
+      expect(Math.abs(b.other)).toBeLessThan(1e-6)
+      expect(b.total).toBeCloseTo(totalOutstandingLoans(months[i]) - totalOutstandingLoans(months[i - 1]), 6)
+    }
+  })
+
+  it('follows the product-type chips', () => {
+    const keys = new Set<FilterKey>(ALL_KEYS); keys.delete('sfr')
+    const months = applyFilter(run().months, keys, null)
+    expect(months[1].active_change.past_maturity.sfr).toBe(0)
+    for (let i = 1; i < months.length; i++) {
+      expect(Math.abs(monthBridge(months[i - 1], months[i]).other)).toBeLessThan(1e-6)
+    }
+  })
+
+  it('leaves HHH imports out of the loans-only payoffs, since their balance is not in the Active rows', () => {
+    const r = run()
+    expect(r.months.reduce((s, m) => s + m.payoffs_loans_by_segment.hhh, 0)).toBe(0)
+    expect(r.months.reduce((s, m) => s + m.payoffs_by_segment.hhh, 0)).toBe(400_000)
   })
 })

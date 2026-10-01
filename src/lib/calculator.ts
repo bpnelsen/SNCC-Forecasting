@@ -8,6 +8,7 @@ import {
   LandBucketProject,
   ForecastSettings,
   LandBucketMonth,
+  ActiveChange,
   LandBucketProjectSchedule,
   MonthlyBalance,
   ForecastResult,
@@ -986,6 +987,11 @@ export function runForecast(input: ForecastInput): ForecastResult {
   const emptyParentSegments = (): ParentSegmentLoans => ({
     sfr: [], mfr: [], and: [], raw_land: [], finished_lots: [], hhh: [],
   })
+  // Imported loan types whose balances appear in the Active rows
+  // (active_sfr includes OTC). HHH and UNKNOWN imports are held at 0 there.
+  const ACTIVE_ROW_TYPES = new Set<LoanType>(['SFR', 'OTC', 'MFR', 'A&D', 'RAW_LAND', 'FINISHED_LOTS'])
+  const emptySegRecord = (): Record<Segment, number> =>
+    ({ sfr: 0, mfr: 0, and: 0, raw_land: 0, finished_lots: 0, hhh: 0 })
   const loanTypeToSegment: Record<LoanType, Segment> = {
     SFR: 'sfr', MFR: 'mfr', 'A&D': 'and', RAW_LAND: 'raw_land',
     FINISHED_LOTS: 'finished_lots', HHH: 'hhh', OTC: 'sfr', UNKNOWN: 'hhh',
@@ -1294,16 +1300,38 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const payoffs_loans_by_segment: Record<Segment, number> = {
       sfr: 0, mfr: 0, and: 0, raw_land: 0, finished_lots: 0, hhh: 0,
     }
+    // Month-over-month change in the Active rows, by cause, so the Dashboard
+    // can show exactly why Total Outstanding (Loans) moves between months.
+    // Only loans that are IN the Active rows count (HHH / UNKNOWN imports are
+    // held at 0 there). Components sum exactly to the change in Σ active_<seg>.
+    const active_change: ActiveChange = {
+      past_maturity: emptySegRecord(), maturing: emptySegRecord(), paydown: emptySegRecord(),
+    }
     for (const loan of input.loans) {
       const key = loan.id ?? loan.loan_number
       const curr = projectExistingLoanOutstanding(loan, m.date, startDate)
       const prev = prevExistingBalances.get(key) ?? 0
+      const seg = loanTypeToSegment[loan.loan_type]
+      const inActiveRows = ACTIVE_ROW_TYPES.has(loan.loan_type)
       if (i > 0 && prev > 0 && curr === 0) {
-        const seg = loanTypeToSegment[loan.loan_type]
         payoffs_count += 1
         payoffs_amount += prev
         payoffs_by_segment[seg] += prev
-        payoffs_loans_by_segment[seg] += prev
+        // Loans-only payoffs: only loans whose balance is in the Active rows,
+        // or the column would show payoffs of balances it never carried.
+        if (inActiveRows) payoffs_loans_by_segment[seg] += prev
+      }
+      if (i > 0 && inActiveRows && curr !== prev) {
+        if (prev > 0 && curr === 0) {
+          // A loan already past maturity when the forecast starts stays on the
+          // books in month 0 (so the rows tie the tile) and drops out in month
+          // 1 — all of them at once. Split out so that cliff is visible.
+          const due = loan.current_loan_due_date ? parseISO(loan.current_loan_due_date) : null
+          const bucket = due && due < months[0].date ? 'past_maturity' : 'maturing'
+          active_change[bucket][seg] -= prev
+        } else {
+          active_change.paydown[seg] += curr - prev
+        }
       }
       prevExistingBalances.set(key, curr)
     }
@@ -1395,6 +1423,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
       payoffs_amount,
       payoffs_by_segment,
       payoffs_loans_by_segment,
+      active_change,
       cash_flow,
     })
   }

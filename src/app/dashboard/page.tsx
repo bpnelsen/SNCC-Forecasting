@@ -15,7 +15,7 @@ import {
   type FilterKey, type FilterChip, CHIPS, ALL_KEYS, applyFilter,
 } from '@/lib/dashboard-filter'
 import {
-  activeOnBooks, forecastedAnd, forecastLayer, totalOutstandingLoans, totalOutstandingAll,
+  activeOnBooks, forecastedAnd, forecastLayer, totalOutstandingLoans, totalOutstandingAll, monthBridge,
 } from '@/lib/summary'
 
 // Render the active version's as_of_date (YYYY-MM-DD from the engine) as
@@ -409,6 +409,7 @@ export default function DashboardPage() {
         outstandingTile={outstanding}
         reconciliation={data.reconciliation}
         asOfDate={data.as_of_date}
+        parentFiltered={parentsFiltered}
       />
     </div>
   )
@@ -419,12 +420,14 @@ interface ReconciliationPanelProps {
   outstandingTile: number
   reconciliation: ForecastResult['reconciliation']
   asOfDate: string | null | undefined
+  // The month-over-month breakdown has no per-parent data.
+  parentFiltered: boolean
 }
 
 // Diagnostic surface for "Truth 5" — shows each expected identity between
 // the Monthly Summary Table's month-0 column and the tiles / Current
 // Breakdown, with the delta and the structural reason when they differ.
-function ReconciliationPanel({ months, outstandingTile, reconciliation, asOfDate }: ReconciliationPanelProps) {
+function ReconciliationPanel({ months, outstandingTile, reconciliation, asOfDate, parentFiltered }: ReconciliationPanelProps) {
   if (months.length === 0) return null
   const m0 = months[0]
   const fcstAnd0 = forecastedAnd(m0)
@@ -532,6 +535,7 @@ function ReconciliationPanel({ months, outstandingTile, reconciliation, asOfDate
             to bring it in.
           </div>
         )}
+        {months.length > 1 && <MonthBridge prev={months[0]} curr={months[1]} parentFiltered={parentFiltered} />}
       </div>
     </div>
   )
@@ -544,6 +548,61 @@ interface SummaryRow {
   kind: 'currency' | 'pct' | 'variance'
   // total = bold/strong fg; accent = accent color; forecast = neutral band
   emphasis?: 'total' | 'accent' | 'forecast'
+}
+
+// Why Total Outstanding (Loans) moves from the first forecast month to the
+// second, by cause. That step is the one with a structural cliff: loans
+// already past maturity stay on the books in month 0 (so the rows tie the
+// tile) and all drop out in month 1. The parts sum to the change exactly; any
+// remainder is shown as "Other" rather than folded in.
+function MonthBridge({ prev, curr, parentFiltered }: {
+  prev: MonthlyBalance
+  curr: MonthlyBalance
+  parentFiltered: boolean
+}) {
+  // Sign first, as accountants write it: −$25.7M, not $-25.7M.
+  const fmt = (n: number) => `${n < 0 ? '−' : n > 0 ? '+' : ''}${formatCurrency(Math.abs(n), true)}`
+  if (parentFiltered) {
+    return (
+      <div className="pt-3 mt-3 border-t border-border text-[10px] text-fg-dim italic">
+        The {prev.label} → {curr.label} breakdown covers the whole book only — set Parent to All to see it.
+      </div>
+    )
+  }
+  const b = monthBridge(prev, curr)
+  const lines: { label: string; value: number; note?: string }[] = [
+    { label: `Loans already past maturity before ${prev.label}`, value: b.pastMaturity,
+      note: `On the books in ${prev.label}, assumed paid off in ${curr.label} — all at once` },
+    { label: `Loans maturing in ${prev.label}`, value: b.maturing },
+    { label: 'Finished Lots paydown', value: b.paydown, note: 'Lot releases on existing finished-lots loans' },
+    { label: 'Forecasted SFR', value: b.forecastedSfr, note: 'New cohorts and draws, less cohorts reaching term' },
+    { label: 'Forecasted MFR', value: b.forecastedMfr },
+    { label: 'Forecasted A&D', value: b.forecastedAnd, note: 'A&D cohorts and A&D tab loans: draws less releases' },
+  ]
+  if (Math.abs(b.other) >= 1) lines.push({ label: 'Other (unexplained)', value: b.other })
+
+  return (
+    <div className="pt-3 mt-3 border-t border-border">
+      <div className="text-fg font-medium mb-1.5">
+        Why Total Outstanding (Loans) changes {prev.label} → {curr.label}:{' '}
+        <span className="font-mono">{fmt(b.total)}</span>
+        <span className="text-fg-dim font-normal">
+          {' '}({formatCurrency(totalOutstandingLoans(prev), true)} → {formatCurrency(totalOutstandingLoans(curr), true)})
+        </span>
+      </div>
+      <div className="space-y-0.5">
+        {lines.map(l => (
+          <div key={l.label} className="grid grid-cols-12 gap-2 items-baseline">
+            <div className="col-span-5 text-fg">{l.label}</div>
+            <div className={`col-span-2 text-right font-mono ${l.value < 0 ? 'text-danger' : l.value > 0 ? 'text-success-bright' : 'text-fg-dim'}`}>
+              {Math.abs(l.value) < 1 ? '—' : fmt(l.value)}
+            </div>
+            <div className="col-span-5 text-[10px] text-fg-dim italic">{l.note ?? ''}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 function SummaryTable({ months }: { months: MonthlyBalance[] }) {

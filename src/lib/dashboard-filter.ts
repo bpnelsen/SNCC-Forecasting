@@ -1,4 +1,4 @@
-import type { MonthlyBalance } from './types'
+import type { MonthlyBalance, ActiveChangeBySegment } from './types'
 
 // Dashboard product-type / parent filtering.
 //
@@ -154,6 +154,10 @@ export function applyFilter(
       // Propagate the per-parent planned A&D contribution onto the filtered
       // MonthlyBalance so the Forecasted A&D row reads it directly.
       a_and_d_planned:      sAnd.a_and_d_planned,
+      // Active-row change by cause follows the product-type chips. It has no
+      // per-parent breakdown, so under a parent filter it is left as the
+      // whole book and the Dashboard does not present it as reconciling.
+      active_change: sliceActiveChange(m.active_change, active),
       total_loans: 0,
       total_all:   0,
       variance:    0,
@@ -166,4 +170,22 @@ export function applyFilter(
     prev = filtered.total_all
     return filtered
   })
+}
+
+const ACTIVE_CHANGE_SEGS = ['sfr', 'mfr', 'and', 'raw_land', 'finished_lots', 'hhh'] as const
+
+function sliceActiveChange(
+  change: MonthlyBalance['active_change'] | undefined,
+  active: Set<FilterKey>,
+): MonthlyBalance['active_change'] {
+  const slice = (r: ActiveChangeBySegment | undefined): ActiveChangeBySegment => {
+    const out = { sfr: 0, mfr: 0, and: 0, raw_land: 0, finished_lots: 0, hhh: 0 }
+    for (const k of ACTIVE_CHANGE_SEGS) out[k] = active.has(k) ? (r?.[k] ?? 0) : 0
+    return out
+  }
+  return {
+    past_maturity: slice(change?.past_maturity),
+    maturing:      slice(change?.maturing),
+    paydown:       slice(change?.paydown),
+  }
 }

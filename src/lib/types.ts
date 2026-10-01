@@ -186,6 +186,32 @@ export interface MonthlyBalance {
     hhh: number
   }
   cash_flow: number
+  // Change in the Active rows (Σ active_<seg>) from the previous month, by
+  // cause. Each record is per segment; all zero in month 0. Summed over the
+  // three causes and the segments, it equals Σ active_<seg> this month minus
+  // last month exactly.
+  active_change: ActiveChange
+}
+
+export interface ActiveChange {
+  // Imported loans already past maturity before the forecast's first month.
+  // They stay on the books in month 0 (so the Active rows tie the tile) and
+  // all drop out together in month 1 — negative, and only ever in month 1.
+  past_maturity: ActiveChangeBySegment
+  // Imported loans reaching maturity during the previous month — negative.
+  maturing: ActiveChangeBySegment
+  // Partial changes that aren't a payoff: Finished Lots paying down as lots
+  // release — usually negative.
+  paydown: ActiveChangeBySegment
+}
+
+export interface ActiveChangeBySegment {
+  sfr: number
+  mfr: number
+  and: number
+  raw_land: number
+  finished_lots: number
+  hhh: number
 }
 
 export interface ForecastResult {

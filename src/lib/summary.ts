@@ -1,4 +1,4 @@
-import type { MonthlyBalance } from './types'
+import type { MonthlyBalance, ActiveChangeBySegment } from './types'
 
 // The Monthly Summary totals, defined once.
 //
@@ -40,4 +40,26 @@ export function totalOutstandingLoans(m: MonthlyBalance): number {
 /** Total Outstanding (All) = Loans + HHH/JV + Land Bucket. */
 export function totalOutstandingAll(m: MonthlyBalance): number {
   return totalOutstandingLoans(m) + m.hhh + m.land_bucket
+}
+
+/**
+ * Why Total Outstanding (Loans) changed from `prev` to `curr`, by cause.
+ * The parts sum to `total` exactly; `other` is whatever doesn't, and should be
+ * 0 — it's shown rather than hidden so a gap is visible instead of absorbed.
+ */
+export function monthBridge(prev: MonthlyBalance, curr: MonthlyBalance) {
+  const rowSum = (r: ActiveChangeBySegment | undefined) =>
+    r ? r.sfr + r.mfr + r.and + r.raw_land + r.finished_lots + r.hhh : 0
+  const c = curr.active_change
+  const parts = {
+    pastMaturity:   rowSum(c?.past_maturity),
+    maturing:       rowSum(c?.maturing),
+    paydown:        rowSum(c?.paydown),
+    forecastedSfr:  curr.forecasted_sfr - prev.forecasted_sfr,
+    forecastedMfr:  curr.forecasted_mfr - prev.forecasted_mfr,
+    forecastedAnd:  forecastedAnd(curr) - forecastedAnd(prev),
+  }
+  const total = totalOutstandingLoans(curr) - totalOutstandingLoans(prev)
+  const explained = Object.values(parts).reduce((a, b) => a + b, 0)
+  return { ...parts, other: total - explained, total }
 }

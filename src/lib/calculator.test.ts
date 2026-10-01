@@ -975,3 +975,50 @@ describe('Land Bucket projected balance increases', () => {
     expect(preview).toEqual(forecast)
   })
 })
+
+// ─── Dashboard horizon selector (6 / 9 / 12 / 18 / 24) ───────────────────────
+
+describe('forecast horizon', () => {
+  // A mixed book: an imported loan maturing mid-horizon, recurring new
+  // originations, a land bucket project with sales and an increase, and an
+  // A&D tab loan — every source that evolves month to month.
+  const book = (horizon: number) => runForecast(baseInput({
+    loans: [{
+      borrower: 'Acme', loan_number: 'L-1', loan_program: 'SFR', original_loan_amount: 400_000,
+      loan_funded_date: `${monthKey(-3)}-01`, current_loan_due_date: `${monthKey(8)}-01`,
+      current_loan_amount: 400_000, loan_amount_disbursed: 250_000, loan_amount_remaining: 150_000,
+      interest_reserve_balance: 0, current_interest_rate: 0.07, interest_accrued_mtd: 0,
+      project_name: null, unit_name: null, development_name: null, subdivision_name: null,
+      projected_balance: 400_000, loan_type: 'SFR', number_of_lots: 1, release_period_months: 12,
+    }],
+    loanPrograms: [{ ...SF_PROGRAM, draw_curve: Array(10).fill(0.1), default_term_months: 9 }],
+    newOriginations: [origination({ loan_count: 3, avg_loan_amount: 300_000, total_lots: 40 })],
+    landBucketProjects: [{
+      id: 'lb1', name: 'Willow', builder_id: BUILDER.id, total_lots: 30, lot_price: 80_000,
+      absorption_rate: 2, balance_outstanding: 2_000_000, interest_rate: 0.09,
+      dev_start_date: null, dev_end_date: null, lot_sales_start_date: `${monthKey(4)}-01`,
+      vertical_loan_program_id: SF_PROGRAM.id, vertical_loan_amount: 250_000,
+      lot_release_schedule: {}, balance_increase_schedule: { [monthKey(3)]: 400_000 }, notes: null,
+    }],
+    aAndDLoans: [aAndDLoan({ origination_date: `${monthKey(2)}-01` })],
+    settings: { ...SETTINGS, horizon_months: horizon },
+  }))
+
+  it('returns exactly the chosen number of months', () => {
+    for (const h of [6, 9, 12, 18, 24]) expect(book(h).months).toHaveLength(h)
+  })
+
+  it('agrees month for month with a longer run — a shorter horizon only drops months', () => {
+    const full = book(24)
+    for (const h of [6, 9, 12, 18]) {
+      expect(book(h).months).toEqual(full.months.slice(0, h))
+    }
+  })
+
+  it('takes the peak from the chosen months only', () => {
+    // What the Total Portfolio tile shows as "Peak".
+    const peakOf = (h: number) => Math.max(...book(h).months.map(m => m.total_all))
+    const full = book(24).months.map(m => m.total_all)
+    for (const h of [6, 12]) expect(peakOf(h)).toBe(Math.max(...full.slice(0, h)))
+  })
+})

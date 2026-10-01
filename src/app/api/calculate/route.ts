@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { format } from 'date-fns'
+import { parseHorizon } from '@/lib/horizon'
 import { createServiceClient } from '@/lib/supabase'
 import { runForecast } from '@/lib/calculator'
 import { fetchAll } from '@/lib/fetch-all'
@@ -22,7 +23,17 @@ import {
 // build-time snapshot instead of current DB state.
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
+// ?horizon=N recomputes the forecast for exactly N months, so everything
+// derived from the months — the peak, the charts, the Monthly Summary, every
+// horizon-wide total — covers only that span. Only HORIZON_OPTIONS are
+// accepted; anything else is ignored and the stored
+// forecast_settings.horizon_months applies, as it does when omitted.
+function requestedHorizon(req: Request): number | null {
+  return parseHorizon(new URL(req.url).searchParams.get('horizon'))
+}
+
+export async function GET(req: Request) {
+  const horizon = requestedHorizon(req)
   try {
     const sb = createServiceClient()
 
@@ -132,7 +143,9 @@ export async function GET() {
       parentCompanies,
       parentCompanyPatterns,
       borrowerParentMappings,
-      settings:            settings as ForecastSettings,
+      settings:            horizon == null
+                             ? settings as ForecastSettings
+                             : { ...(settings as ForecastSettings), horizon_months: horizon },
       versionLabel:        version.label,
       // Active version's as_of_date wins. Fall back to its import timestamp
       // (created_at), not today — today would silently drift forward every

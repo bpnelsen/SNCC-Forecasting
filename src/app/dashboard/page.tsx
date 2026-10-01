@@ -10,6 +10,7 @@ import { RefreshCw, AlertCircle, Filter, MessageSquare } from 'lucide-react'
 import Link from 'next/link'
 import { ParentCompanyDropdown } from '@/components/ui/ParentCompanyDropdown'
 import { UNASSIGNED_PARENT_KEY } from '@/lib/calculator'
+import { HORIZON_OPTIONS, DEFAULT_HORIZON, parseHorizon, type Horizon } from '@/lib/horizon'
 import {
   type FilterKey, type FilterChip, CHIPS, ALL_KEYS, applyFilter,
 } from '@/lib/dashboard-filter'
@@ -31,6 +32,8 @@ function formatAsOf(iso: string | null | undefined): string {
 }
 
 
+const HORIZON_STORAGE_KEY = 'sncc.dashboard.horizon'
+
 export default function DashboardPage() {
   const [data, setData]       = useState<ForecastResult | null>(null)
   const [loading, setLoading] = useState(true)
@@ -44,26 +47,60 @@ export default function DashboardPage() {
   // segment, respecting the parent + chip filters.
   const [breakdownMode, setBreakdownMode] = useState<'dollar' | 'count'>('dollar')
 
-  const load = async () => {
+  // Projection horizon: the forecast is recomputed for exactly this many
+  // months (?horizon=), so the Peak, the charts and the Monthly Summary cover
+  // only the chosen span. Remembered per browser; storage can be unavailable
+  // (private windows), in which case the default simply applies.
+  const [horizon, setHorizon] = useState<Horizon>(DEFAULT_HORIZON)
+  const [horizonReady, setHorizonReady] = useState(false)
+  // Each load gets an id; only the latest may write state, so quick clicks
+  // through 6 → 24 can't leave an older, slower response on screen.
+  const requestId = useRef(0)
+
+  const load = async (h: Horizon = horizon) => {
+    const id = ++requestId.current
     setLoading(true); setError(null)
     try {
-      const res = await fetch('/api/calculate', { cache: 'no-store' })
+      const res = await fetch(`/api/calculate?horizon=${h}`, { cache: 'no-store' })
       if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Failed') }
-      setData(await res.json())
+      const json = await res.json()
+      if (id === requestId.current) setData(json)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load')
-    } finally { setLoading(false) }
+      if (id === requestId.current) setError(e instanceof Error ? e.message : 'Failed to load')
+    } finally {
+      if (id === requestId.current) setLoading(false)
+    }
   }
 
-  useEffect(() => { load() }, [])
+  // Read the remembered horizon after mount (the page is prerendered, so
+  // reading storage during render would mismatch), then load with it.
+  useEffect(() => {
+    try {
+      const stored = parseHorizon(window.localStorage.getItem(HORIZON_STORAGE_KEY))
+      if (stored) setHorizon(stored)
+    } catch { /* storage unavailable — keep the default */ }
+    setHorizonReady(true)
+  }, [])
+
+  useEffect(() => {
+    if (horizonReady) load(horizon)
+    // load is recreated each render; horizon is what should trigger a reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [horizonReady, horizon])
+
+  const chooseHorizon = (h: Horizon) => {
+    if (h === horizon) return
+    setHorizon(h)
+    try { window.localStorage.setItem(HORIZON_STORAGE_KEY, String(h)) } catch { /* ignore */ }
+  }
 
   const months = useMemo(
     () => data ? applyFilter(data.months, active, selectedParents) : [],
     [data, active, selectedParents],
   )
 
-  if (loading) return <LoadingState />
-  if (error)   return <ErrorState message={error} onRetry={load} />
+  if (loading && !data) return <LoadingState />
+  if (error)   return <ErrorState message={error} onRetry={() => load(horizon)} />
   if (!data)   return null
 
   const current = months[0]
@@ -115,11 +152,29 @@ export default function DashboardPage() {
             {data.version_label} · {data.total_active_loans} active loans · As of {formatAsOf(data.as_of_date)}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <div className="flex items-center gap-1.5" role="group" aria-label="Projection horizon">
+            <span className="text-[10px] text-fg-dim">Project out</span>
+            <div className="inline-flex rounded-lg border border-border-strong overflow-hidden">
+              {HORIZON_OPTIONS.map(h => (
+                <button
+                  key={h}
+                  type="button"
+                  onClick={() => chooseHorizon(h)}
+                  aria-pressed={h === horizon}
+                  className={`px-2.5 py-1 text-[11px] font-medium transition-colors border-l border-border-strong first:border-l-0
+                    ${h === horizon ? 'bg-accent/15 text-accent' : 'text-fg-dim hover:text-fg hover:bg-border'}`}
+                >
+                  {h} mo
+                </button>
+              ))}
+            </div>
+            {loading && <RefreshCw className="w-3 h-3 text-fg-dim animate-spin" aria-label="Updating" />}
+          </div>
           <Link href="/ask" className="btn-ghost flex items-center gap-1.5">
             <MessageSquare className="w-3.5 h-3.5" /><span>Ask</span>
           </Link>
-          <button onClick={load} className="btn-ghost flex items-center gap-1.5">
+          <button onClick={() => load(horizon)} className="btn-ghost flex items-center gap-1.5">
             <RefreshCw className="w-3.5 h-3.5" /><span>Refresh</span>
           </button>
         </div>

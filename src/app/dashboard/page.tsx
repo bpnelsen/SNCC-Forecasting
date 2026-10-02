@@ -104,7 +104,9 @@ export default function DashboardPage() {
   if (!data)   return null
 
   const current = months[0]
-  const peak    = months.reduce((a, b) => b.total_all > a.total_all ? b : a, months[0])
+  // The headline tile is Total Outstanding (All), the same figure as that row
+  // of the Monthly Summary, so its Peak is taken on the same basis.
+  const peak    = months.reduce((a, b) => totalOutstandingAll(b) > totalOutstandingAll(a) ? b : a, months[0])
   const chipsFiltered  = active.size < CHIPS.length
   const parentsFiltered = selectedParents !== null
   const filtered = chipsFiltered || parentsFiltered
@@ -250,9 +252,9 @@ export default function DashboardPage() {
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 fade-up fade-up-2">
-        <StatCard label={filtered ? 'Total Portfolio (filtered)' : 'Total Portfolio (All)'}
-          value={formatCurrency(current.total_all, true)}
-          delta={`Peak: ${formatCurrency(peak.total_all, true)} (${peak.label})`} accent />
+        <StatCard label={filtered ? 'Total Outstanding (filtered)' : 'Total Outstanding (All)'}
+          value={formatCurrency(totalOutstandingAll(current), true)}
+          delta={`Peak: ${formatCurrency(totalOutstandingAll(peak), true)} (${peak.label})`} accent />
         <StatCard label="Active Loans" value={formatCurrency(current.total_loans, true)}
           subLabel={`${totalActiveLoans} loans${parentsFiltered ? ' · parent-filtered' : ''}`} />
         <StatCard label="Active Loan (Outstanding)"
@@ -585,10 +587,10 @@ interface SummaryRow {
   emphasis?: 'total' | 'accent' | 'forecast'
 }
 
-// What Total Portfolio (All) is made of, against Total Outstanding (All). The
-// tile values existing loans at their full loan amount and includes Land
+// What Total Portfolio (All) is made of, against Total Outstanding (All). It
+// is no longer a tile, but is still the engine's total_all. It values existing loans at their full loan amount and includes Land
 // Bucket lot-sale verticals; Outstanding values them at their drawn balance
-// and leaves those out. The parts sum to the tile exactly.
+// and leaves those out. The parts sum to it exactly.
 function PortfolioBreakdown({ m, parentFiltered }: { m: MonthlyBalance; parentFiltered: boolean }) {
   const fmt = (n: number) => `${n < 0 ? '−' : n > 0 ? '+' : ''}${formatCurrency(Math.abs(n), true)}`
   if (parentFiltered) {
@@ -603,11 +605,11 @@ function PortfolioBreakdown({ m, parentFiltered }: { m: MonthlyBalance; parentFi
     { label: 'Total Outstanding (All)', value: b.outstandingAll, base: true,
       note: 'Drawn balances: loans, forecast, HHH/JV, Land Bucket' },
     { label: 'Undrawn commitment on existing loans', value: b.undrawn,
-      note: 'The tile counts each loan at its full loan amount, not what is drawn' },
+      note: 'Total Portfolio counts each loan at its full loan amount, not what is drawn' },
     { label: 'Loans past maturity', value: b.pastMaturity,
-      note: 'The tile drops them this month; the Active rows still carry them' },
+      note: 'Total Portfolio drops them this month; the Active rows still carry them' },
     { label: 'Land Bucket lot-sale loans', value: b.extraForecast,
-      note: 'Vertical loans spawned by lot sales — in the tile, not in Outstanding' },
+      note: 'Vertical loans spawned by lot sales — in Total Portfolio, not in Outstanding' },
   ]
   if (Math.abs(b.other) >= 1) lines.push({ label: 'Other (unexplained)', value: b.other })
   return (

@@ -6,7 +6,7 @@ import { StatCard } from '@/components/ui/StatCard'
 import { TotalBalanceChart, PortfolioStackedChart, IncomeChart, VarianceChart } from '@/components/charts/PortfolioCharts'
 import { ForecastResult, MonthlyBalance } from '@/lib/types'
 import { formatCurrency, formatPct, formatVariance } from '@/lib/utils'
-import { RefreshCw, AlertCircle, Filter, MessageSquare } from 'lucide-react'
+import { RefreshCw, AlertCircle, Filter, MessageSquare, ChevronDown, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
 import { ParentCompanyDropdown } from '@/components/ui/ParentCompanyDropdown'
 import { UNASSIGNED_PARENT_KEY } from '@/lib/calculator'
@@ -427,7 +427,21 @@ interface ReconciliationPanelProps {
 // Diagnostic surface for "Truth 5" — shows each expected identity between
 // the Monthly Summary Table's month-0 column and the tiles / Current
 // Breakdown, with the delta and the structural reason when they differ.
+const RECONCILIATION_OPEN_KEY = 'sncc.dashboard.reconciliationOpen'
+
 function ReconciliationPanel({ months, outstandingTile, reconciliation, asOfDate, parentFiltered }: ReconciliationPanelProps) {
+  // Collapsed by default; the choice is remembered per browser. Read after
+  // mount (the page is prerendered) and storage failures keep the default.
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    try { if (window.localStorage.getItem(RECONCILIATION_OPEN_KEY) === '1') setOpen(true) } catch { /* default */ }
+  }, [])
+  const toggleOpen = () => {
+    const next = !open
+    setOpen(next)
+    try { window.localStorage.setItem(RECONCILIATION_OPEN_KEY, next ? '1' : '0') } catch { /* ignore */ }
+  }
+
   if (months.length === 0) return null
   const m0 = months[0]
   const fcstAnd0 = forecastedAnd(m0)
@@ -496,15 +510,34 @@ function ReconciliationPanel({ months, outstandingTile, reconciliation, asOfDate
   // Proration treats everything up to today as funded and on the books. That
   // only holds if the loan report is current; YYYY-MM-DD compares by string.
   const reportLags = !!asOfDate && !!anchor && asOfDate.slice(0, 10) < anchor.slice(0, 10)
+  // Everything the panel would flag, so the collapsed header still says
+  // whether the numbers tie — a problem must not hide behind a closed panel.
+  const issues =
+    rows.filter(r => !r.ok).length +
+    (reportLags ? 1 : 0) +
+    (!parentFiltered && Math.abs(portfolioBreakdown(m0).other) >= 1 ? 1 : 0) +
+    (!parentFiltered && months.length > 1 && Math.abs(monthBridge(months[0], months[1]).other) >= 1 ? 1 : 0)
 
   return (
     <div className="card fade-up fade-up-5">
-      <div className="card-header">
-        <span className="card-title">Reconciliation · month 0</span>
+      <button
+        type="button"
+        onClick={toggleOpen}
+        aria-expanded={open}
+        className="w-full card-header flex items-center justify-between hover:bg-border/30 transition-colors"
+      >
+        <span className="flex items-center gap-2">
+          {open ? <ChevronDown className="w-3.5 h-3.5 text-fg-dim" /> : <ChevronRight className="w-3.5 h-3.5 text-fg-dim" />}
+          <span className="card-title">Reconciliation · month 0</span>
+          {issues === 0
+            ? <span className="text-[10px] text-success-bright">✓ all reconcile</span>
+            : <span className="text-[10px] text-danger font-medium">✗ {issues} to check</span>}
+        </span>
         <span className="text-[10px] text-fg-dim">
           {fracPct}% of {m0.label} still ahead
         </span>
-      </div>
+      </button>
+      {open && (
       <div className="p-4 space-y-2 text-[11px]">
         {rows.map(r => (
           <div key={r.name} className="grid grid-cols-12 gap-2 items-baseline">
@@ -538,6 +571,7 @@ function ReconciliationPanel({ months, outstandingTile, reconciliation, asOfDate
         <PortfolioBreakdown m={m0} parentFiltered={parentFiltered} />
         {months.length > 1 && <MonthBridge prev={months[0]} curr={months[1]} parentFiltered={parentFiltered} />}
       </div>
+      )}
     </div>
   )
 }

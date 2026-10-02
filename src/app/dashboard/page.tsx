@@ -708,12 +708,11 @@ function SummaryTable({ months }: { months: MonthlyBalance[] }) {
     { label: 'Forecasted A&D',  values: months.map(forecastedAnd),                       kind: 'currency', emphasis: 'forecast' },
     // HHH/JV is an equity investment, not a loan. Sourced from the manual
     // /hhh-jv tab. Excluded from Total Outstanding (Loans); included in
-    // Total Outstanding (All) and Total (All).
+    // Total Outstanding (All).
     { label: 'HHH/JV',          values: months.map(m => m.hhh),                    kind: 'currency' },
     { label: 'Land Bucket',     values: months.map(m => m.land_bucket),            kind: 'currency' },
     { label: 'Total Outstanding (Loans)', values: months.map(totalOutstandingLoans),                                        kind: 'currency', emphasis: 'total' },
     { label: 'Total Outstanding (All)',   values: months.map(totalOutstandingAll),        kind: 'currency', emphasis: 'total' },
-    { label: 'Total (All)',     values: months.map(m => m.total_all),              kind: 'currency', emphasis: 'total' },
     { label: 'Variance',      values: months.map(m => m.variance),                kind: 'variance' },
     { label: 'Income',        values: months.map(m => m.total_income),            kind: 'currency', emphasis: 'accent' },
     { label: 'Ann. Yield',    values: months.map(m => m.annualized_yield_pct),    kind: 'pct' },

@@ -53,7 +53,7 @@ function sliceSegment(
       // m.and already folds in planned A&D (the A&D tab), and the caller adds
       // a_and_d_planned back when it builds the segment total. Leaving it in
       // `existing` too counted every A&D tab loan twice in m.and, and through
-      // it in Total Portfolio (All), the Total (All) row, the Peak and the
+      // it in Total Portfolio (All), the Peak and the
       // charts. The per-parent branch below never had this: its slot.and is
       // imported loans only.
       existing:    m[seg] - fcst - planned,

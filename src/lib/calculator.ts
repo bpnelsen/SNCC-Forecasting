@@ -9,6 +9,7 @@ import {
   ForecastSettings,
   LandBucketMonth,
   ActiveChange,
+  PortfolioGap,
   LandBucketProjectSchedule,
   MonthlyBalance,
   ForecastResult,
@@ -1318,6 +1319,35 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const total_loans = sfr + mfr + and + raw_land + finished_lots + hhh
     const total_all = total_loans + land_bucket
 
+    // Why Total Portfolio (All) differs from Total Outstanding (All), by part
+    // and segment. The two share HHH/JV, Land Bucket, planned A&D and the
+    // scheduled SFR/MFR/A&D forecast; they differ only in how existing loans
+    // are valued and in which other forecast cohorts they include:
+    //   undrawn        existing loans at their full loan amount here, at their
+    //                  drawn balance in Outstanding — the commitment not yet
+    //                  drawn (positive)
+    //   past_maturity  loans past their due date: dropped here from month 0,
+    //                  kept in the Active rows for month 0 (negative)
+    //   extra_forecast cohorts in the segment totals but not in Outstanding's
+    //                  forecast rows — vertical loans from Land Bucket lot
+    //                  sales, and any scheduled Raw Land / Finished Lots
+    // Summed, they equal total_all − Total Outstanding (All) exactly.
+    const portfolio_gap: PortfolioGap = {
+      undrawn: emptySegRecord(), past_maturity: emptySegRecord(), extra_forecast: emptySegRecord(),
+    }
+    for (const loan of input.loans) {
+      if (!ACTIVE_ROW_TYPES.has(loan.loan_type)) continue
+      const seg = loanTypeToSegment[loan.loan_type]
+      const face  = projectExistingLoanBalance(loan, m.date, input.loanPrograms, startDate)
+      const drawn = projectExistingLoanOutstanding(loan, m.date, startDate, input.loanPrograms)
+      if (face === 0 && drawn > 0) portfolio_gap.past_maturity[seg] -= drawn
+      else portfolio_gap.undrawn[seg] += face - drawn
+    }
+    for (const seg of ['sfr', 'mfr', 'and', 'raw_land', 'finished_lots'] as const) {
+      const inForecastRows = seg === 'sfr' || seg === 'mfr' || seg === 'and' ? newBySegmentScheduled[seg] : 0
+      portfolio_gap.extra_forecast[seg] = newBySegment[seg] - inForecastRows
+    }
+
     // Income: per-loan rate where available, program default for new cohorts
     let yield_active = 0
     for (const loan of input.loans) {
@@ -1508,6 +1538,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
       payoffs_by_segment,
       payoffs_loans_by_segment,
       active_change,
+      portfolio_gap,
       cash_flow,
     })
   }

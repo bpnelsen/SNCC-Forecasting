@@ -191,6 +191,19 @@ export interface MonthlyBalance {
   // three causes and the segments, it equals Σ active_<seg> this month minus
   // last month exactly.
   active_change: ActiveChange
+  // Why Total Portfolio (All) differs from Total Outstanding (All), per
+  // segment. Summed, it equals total_all minus Total Outstanding (All).
+  portfolio_gap: PortfolioGap
+}
+
+export interface PortfolioGap {
+  // Existing loans: full loan amount here vs drawn balance in Outstanding.
+  undrawn: ActiveChangeBySegment
+  // Loans past their due date: in Outstanding's month 0, not here (negative).
+  past_maturity: ActiveChangeBySegment
+  // Forecast cohorts in the segment totals but not in Outstanding's forecast
+  // rows: Land Bucket lot-sale verticals, scheduled Raw Land / Finished Lots.
+  extra_forecast: ActiveChangeBySegment
 }
 
 export interface ActiveChange {

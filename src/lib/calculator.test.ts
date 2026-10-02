@@ -3,7 +3,7 @@ import { addMonths, format, startOfMonth } from 'date-fns'
 import {
   runForecast, originationsInMonth, effectiveDraw, previewLandBucketProject, type ForecastInput,
 } from './calculator'
-import { totalOutstandingAll, totalOutstandingLoans, monthBridge } from './summary'
+import { totalOutstandingAll, totalOutstandingLoans, monthBridge, portfolioBreakdown } from './summary'
 import { applyFilter, ALL_KEYS, type FilterKey } from './dashboard-filter'
 import type {
   Loan, LoanProgram, Builder, ForecastSettings, NewOriginationEntry, AAndDLoan, LandBucketProject,
@@ -1176,5 +1176,68 @@ describe('existing loans draw up along the draw curve', () => {
     const r = run(loan({ loan_type: 'FINISHED_LOTS', loan_amount_disbursed: 500_000, original_loan_amount: 600_000,
                          current_loan_amount: 500_000, release_period_months: 12 }))
     expect(r.months.slice(0, 3).map(m => Math.round(m.active_finished_lots))).toEqual([500_000, 450_000, 400_000])
+  })
+})
+
+// ─── Total Portfolio (All): where it comes from ──────────────────────────────
+
+describe('Total Portfolio (All)', () => {
+  const loan = (over: Partial<Loan>): Loan => ({
+    borrower: 'Acme', loan_number: 'L', loan_program: 'SFR', original_loan_amount: 500_000,
+    loan_funded_date: `${monthKey(-2)}-01`, current_loan_due_date: `${monthKey(12)}-01`,
+    current_loan_amount: 500_000, loan_amount_disbursed: 300_000, loan_amount_remaining: 200_000,
+    interest_reserve_balance: 0, current_interest_rate: 0.07, interest_accrued_mtd: 0,
+    project_name: null, unit_name: null, development_name: null, subdivision_name: null,
+    projected_balance: 460_000, loan_type: 'SFR', number_of_lots: 1, release_period_months: 12,
+    ...over,
+  })
+  const run = () => runForecast(baseInput({
+    loans: [
+      loan({ loan_number: 'drawing' }),                                              // undrawn 200K
+      loan({ loan_number: 'matured', current_loan_due_date: `${monthKey(-1)}-15` }), // past maturity
+    ],
+    loanPrograms: [{ ...SF_PROGRAM, draw_curve: Array(10).fill(0.1), default_term_months: 12 }],
+    newOriginations: [origination({ loan_count: 2, avg_loan_amount: 250_000, total_lots: 10 })],
+    aAndDLoans: [aAndDLoan({ origination_date: `${monthKey(1)}-01` })],
+    landBucketProjects: [{
+      id: 'lb1', name: 'Willow', builder_id: BUILDER.id, total_lots: 20, lot_price: 80_000,
+      absorption_rate: 2, balance_outstanding: 1_500_000, interest_rate: 0.09,
+      dev_start_date: null, dev_end_date: null, lot_sales_start_date: `${monthKey(0)}-01`,
+      vertical_loan_program_id: SF_PROGRAM.id, vertical_loan_amount: 300_000,
+      lot_release_schedule: {}, notes: null,
+    }],
+    settings: { ...SETTINGS, horizon_months: 6 },
+  }))
+
+  it('shows the engine’s own totals on the unfiltered Dashboard — A&D tab loans counted once', () => {
+    // Regression: the unfiltered branch of sliceSegment left planned A&D in
+    // `existing` and then added it again, so every A&D tab loan was counted
+    // twice in Total Portfolio (All), the Total (All) row, the Peak and charts.
+    const r = run()
+    const dash = applyFilter(r.months, ALL_KEYS, null)
+    expect(r.months.some(m => m.a_and_d_planned > 0)).toBe(true)
+    r.months.forEach((m, i) => {
+      expect(dash[i].and).toBeCloseTo(m.and, 6)
+      expect(dash[i].total_all).toBeCloseTo(m.total_all, 6)
+    })
+  })
+
+  it('equals Total Outstanding (All) plus undrawn commitment, past-maturity loans and lot-sale loans — exactly', () => {
+    const dash = applyFilter(run().months, ALL_KEYS, null)
+    for (const m of dash) {
+      const b = portfolioBreakdown(m)
+      expect(Math.abs(b.other)).toBeLessThan(1e-6)
+    }
+    const b0 = portfolioBreakdown(dash[0])
+    expect(b0.undrawn).toBe(500_000 - 300_000)       // 'drawing': full amount vs drawn
+    expect(b0.pastMaturity).toBe(-300_000)           // 'matured': in Outstanding, not here
+    expect(b0.extraForecast).toBeGreaterThan(0)      // Willow's lot-sale verticals
+  })
+
+  it('still adds up with a product type switched off', () => {
+    const keys = new Set<FilterKey>(ALL_KEYS); keys.delete('sfr')
+    for (const m of applyFilter(run().months, keys, null)) {
+      expect(Math.abs(portfolioBreakdown(m).other)).toBeLessThan(1e-6)
+    }
   })
 })

@@ -64,3 +64,20 @@ export function monthBridge(prev: MonthlyBalance, curr: MonthlyBalance) {
   const explained = Object.values(parts).reduce((a, b) => a + b, 0)
   return { ...parts, other: total - explained, total }
 }
+
+/**
+ * Total Portfolio (All) as Total Outstanding (All) plus the parts where it
+ * counts differently. `other` should be 0 and is shown, not absorbed.
+ */
+export function portfolioBreakdown(m: MonthlyBalance) {
+  const rowSum = (r: ActiveChangeBySegment | undefined) =>
+    r ? r.sfr + r.mfr + r.and + r.raw_land + r.finished_lots + r.hhh : 0
+  const outstandingAll = totalOutstandingAll(m)
+  const parts = {
+    undrawn:       rowSum(m.portfolio_gap?.undrawn),
+    pastMaturity:  rowSum(m.portfolio_gap?.past_maturity),
+    extraForecast: rowSum(m.portfolio_gap?.extra_forecast),
+  }
+  const explained = outstandingAll + parts.undrawn + parts.pastMaturity + parts.extraForecast
+  return { outstandingAll, ...parts, other: m.total_all - explained, total: m.total_all }
+}

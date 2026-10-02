@@ -15,7 +15,7 @@ import {
   type FilterKey, type FilterChip, CHIPS, ALL_KEYS, applyFilter,
 } from '@/lib/dashboard-filter'
 import {
-  activeOnBooks, forecastedAnd, forecastLayer, totalOutstandingLoans, totalOutstandingAll, monthBridge,
+  activeOnBooks, forecastedAnd, forecastLayer, totalOutstandingLoans, totalOutstandingAll, monthBridge, portfolioBreakdown,
 } from '@/lib/summary'
 
 // Render the active version's as_of_date (YYYY-MM-DD from the engine) as
@@ -535,6 +535,7 @@ function ReconciliationPanel({ months, outstandingTile, reconciliation, asOfDate
             to bring it in.
           </div>
         )}
+        <PortfolioBreakdown m={m0} parentFiltered={parentFiltered} />
         {months.length > 1 && <MonthBridge prev={months[0]} curr={months[1]} parentFiltered={parentFiltered} />}
       </div>
     </div>
@@ -548,6 +549,52 @@ interface SummaryRow {
   kind: 'currency' | 'pct' | 'variance'
   // total = bold/strong fg; accent = accent color; forecast = neutral band
   emphasis?: 'total' | 'accent' | 'forecast'
+}
+
+// What Total Portfolio (All) is made of, against Total Outstanding (All). The
+// tile values existing loans at their full loan amount and includes Land
+// Bucket lot-sale verticals; Outstanding values them at their drawn balance
+// and leaves those out. The parts sum to the tile exactly.
+function PortfolioBreakdown({ m, parentFiltered }: { m: MonthlyBalance; parentFiltered: boolean }) {
+  const fmt = (n: number) => `${n < 0 ? '−' : n > 0 ? '+' : ''}${formatCurrency(Math.abs(n), true)}`
+  if (parentFiltered) {
+    return (
+      <div className="pt-3 mt-3 border-t border-border text-[10px] text-fg-dim italic">
+        The Total Portfolio breakdown covers the whole book only — set Parent to All to see it.
+      </div>
+    )
+  }
+  const b = portfolioBreakdown(m)
+  const lines: { label: string; value: number; note?: string; base?: boolean }[] = [
+    { label: 'Total Outstanding (All)', value: b.outstandingAll, base: true,
+      note: 'Drawn balances: loans, forecast, HHH/JV, Land Bucket' },
+    { label: 'Undrawn commitment on existing loans', value: b.undrawn,
+      note: 'The tile counts each loan at its full loan amount, not what is drawn' },
+    { label: 'Loans past maturity', value: b.pastMaturity,
+      note: 'The tile drops them this month; the Active rows still carry them' },
+    { label: 'Land Bucket lot-sale loans', value: b.extraForecast,
+      note: 'Vertical loans spawned by lot sales — in the tile, not in Outstanding' },
+  ]
+  if (Math.abs(b.other) >= 1) lines.push({ label: 'Other (unexplained)', value: b.other })
+  return (
+    <div className="pt-3 mt-3 border-t border-border">
+      <div className="text-fg font-medium mb-1.5">
+        Where Total Portfolio (All) comes from, {m.label}:{' '}
+        <span className="font-mono">{formatCurrency(b.total, true)}</span>
+      </div>
+      <div className="space-y-0.5">
+        {lines.map(l => (
+          <div key={l.label} className="grid grid-cols-12 gap-2 items-baseline">
+            <div className={`col-span-5 ${l.base ? 'text-fg font-medium' : 'text-fg'}`}>{l.label}</div>
+            <div className="col-span-2 text-right font-mono text-fg">
+              {l.base ? formatCurrency(l.value, true) : Math.abs(l.value) < 1 ? '—' : fmt(l.value)}
+            </div>
+            <div className="col-span-5 text-[10px] text-fg-dim italic">{l.note ?? ''}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 // Why Total Outstanding (Loans) moves from the first forecast month to the

@@ -48,8 +48,15 @@ function sliceSegment(
   if (selectedParents === null) {
     const fcst = m[`forecasted_${seg}` as const]
     const active = seg === 'hhh' ? 0 : m[`active_${seg}` as const]
+    const planned = seg === 'and' ? m.a_and_d_planned : 0
     return {
-      existing:    m[seg] - fcst,
+      // m.and already folds in planned A&D (the A&D tab), and the caller adds
+      // a_and_d_planned back when it builds the segment total. Leaving it in
+      // `existing` too counted every A&D tab loan twice in m.and, and through
+      // it in Total Portfolio (All), the Total (All) row, the Peak and the
+      // charts. The per-parent branch below never had this: its slot.and is
+      // imported loans only.
+      existing:    m[seg] - fcst - planned,
       forecasted:  fcst,
       outstanding: m[`outstanding_${seg}` as const],
       active,
@@ -158,6 +165,7 @@ export function applyFilter(
       // per-parent breakdown, so under a parent filter it is left as the
       // whole book and the Dashboard does not present it as reconciling.
       active_change: sliceActiveChange(m.active_change, active),
+      portfolio_gap: slicePortfolioGap(m.portfolio_gap, active),
       total_loans: 0,
       total_all:   0,
       variance:    0,
@@ -188,5 +196,21 @@ function sliceActiveChange(
     maturing:      slice(change?.maturing),
     draws:         slice(change?.draws),
     paydown:       slice(change?.paydown),
+  }
+}
+
+function slicePortfolioGap(
+  gap: MonthlyBalance['portfolio_gap'] | undefined,
+  active: Set<FilterKey>,
+): MonthlyBalance['portfolio_gap'] {
+  const slice = (r: ActiveChangeBySegment | undefined): ActiveChangeBySegment => {
+    const out = { sfr: 0, mfr: 0, and: 0, raw_land: 0, finished_lots: 0, hhh: 0 }
+    for (const k of ACTIVE_CHANGE_SEGS) out[k] = active.has(k) ? (r?.[k] ?? 0) : 0
+    return out
+  }
+  return {
+    undrawn:        slice(gap?.undrawn),
+    past_maturity:  slice(gap?.past_maturity),
+    extra_forecast: slice(gap?.extra_forecast),
   }
 }

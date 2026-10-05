@@ -9,6 +9,7 @@ Construction lending portfolio intelligence dashboard for Security National Fina
 - Land Bucket, New Originations, A&D, HHH/JV and Approved Loans planning tabs
 - Current Report import with drag-and-drop (`.xlsx`, `.xlsm`, `.xls`)
 - Full version history — restore any prior import as active
+- **Maturity / Historical** payoff switch (top left) with a Payoff Schedules tab
 - `/ask` assistant over the forecast data (optional, needs an OpenRouter key)
 
 ---
@@ -42,7 +43,7 @@ Create a project at [supabase.com](https://supabase.com), pick a nearby region, 
 ### 3. Run the database migrations — **all of them, in order**
 
 In Supabase Dashboard → **SQL Editor**, run every file in `supabase/migrations/`
-in filename order (`001_…` through `022_…`).
+in filename order (`001_…` through `023_…`).
 
 Running only `001` is not enough — the app will not start. `002` creates
 `forecast_settings`, which `/api/calculate` requires, and later migrations add
@@ -70,6 +71,7 @@ true, and asserts RLS is enabled on every table.
 | `020` | **Enables RLS on every table** |
 | `021` | Drops the orphaned `scheduled_originations` table (guarded — refuses if it has rows) |
 | `022` | Adds `balance_increase_schedule` to Land Bucket projects (projected monthly balance increases). Until it runs, projects save normally but increases can't be saved |
+| `023` | `payoff_schedules` + `forecast_settings.payoff_mode` — the Maturity / Historical switch. Until it runs the app stays on Maturity and the switch is disabled |
 
 ### 4. Configure environment variables
 
@@ -207,6 +209,35 @@ Land Bucket projects are edited on the **Land Bucket** tab; planned starts on
 
 ---
 
+### Maturity / Historical payoff
+
+The switch at the top left of the sidebar picks how the **whole app** assumes
+loans pay off. It's stored on the active `forecast_settings` row, so flipping
+it changes every page, every viewer and the `/ask` assistant.
+
+- **Maturity** (default) — the original behaviour: imported loans run to
+  `current_loan_due_date`; forecast cohorts run to their program's term.
+- **Historical** — loans pay off at **funded date + N months**, where N comes
+  from the **Payoff Schedules** tab (one value per parent company × loan type:
+  SFR, OTC, MFR, A&D, Raw Land, Finished Lots). The program draw curve is
+  prorated so the draw that took the maturity term fits inside N months.
+
+Historical-mode rules:
+
+- A parent's own value wins, then the **Default** row, then the loan's
+  maturity date (no value anywhere → behaves exactly as in Maturity).
+- A loan whose funded + N months is already **before the current month**
+  keeps its maturity payoff. So does a loan with no funded date.
+- The assumed payoff replaces maturity in both directions — it can be earlier
+  or later than the due date.
+- Finished Lots keep their linear release paydown, and pay off in full at the
+  assumed date.
+- New-origination and Land-Bucket cohorts use the parent company of their
+  builder and the loan type of their program (SF → SFR, MF → MFR, AD → A&D,
+  RAW_LAND → Raw Land, LOT → Finished Lots).
+- Planned A&D loans, HHH/JV projects and Land Bucket balances are unchanged —
+  they have their own release models.
+
 ## Loan classification
 
 `classifyLoan()` in `src/lib/parser.ts` reads **only** the `Loan Program` field.
@@ -246,6 +277,7 @@ ignored) and runs for `horizon_months`.
 | New origination cohorts | `lotOriginationBalance()` — recurring series over a lot pool |
 | Planned A&D loans | `projectAAndDLoan()` — origination → draw ramp → lot releases |
 | HHH/JV projects | `hhhJvBalanceForMonth()` |
+| Historical payoff | `buildLoanPayoffPlans()`, `prorateDrawCurve()`, `payoffMonthsFor()` |
 | Income | per-loan rate where present, else program default / settings fallback |
 | Annualized yield | (monthly income / total balance) × 12 |
 
@@ -306,7 +338,7 @@ src/
     ├── parser.ts               # Excel → Loan[]  (+ parser.test.ts)
     ├── calculator.ts           # forecast engine  (+ calculator.test.ts)
     └── types.ts, utils.ts, gemini-tools.ts
-supabase/migrations/            # 001–022, apply all in order
+supabase/migrations/            # 001–023, apply all in order
 .github/workflows/ci.yml        # typecheck, lint, test, build, migrations
 ```
 

@@ -10,7 +10,7 @@ import { createServiceClient } from '@/lib/supabase'
 import { runForecast } from '@/lib/calculator'
 import type {
   ForecastResult, Loan, Builder, LoanProgram, LandBucketProject, HHHJVProject,
-  AAndDLoan, ParentCompany, ParentCompanyPattern, BorrowerParentMapping,
+  AAndDLoan, ParentCompany, ParentCompanyPattern, BorrowerParentMapping, PayoffSchedule,
   NewOriginationEntry, ForecastSettings,
 } from '@/lib/types'
 
@@ -106,7 +106,7 @@ async function loadForecastInput() {
     .from('forecast_settings').select('*').eq('is_active', true).maybeSingle()
   if (!settings) throw new Error('No active forecast_settings row.')
 
-  const [loans, builders, programs, lbProjects, newOrigs, hhhJv, aAndD, parents, patterns, mappings] =
+  const [loans, builders, programs, lbProjects, newOrigs, hhhJv, aAndD, parents, patterns, mappings, payoff] =
     await Promise.all([
       sb.from('loans').select('*').eq('version_id', version.id),
       sb.from('builders').select('*'),
@@ -118,6 +118,7 @@ async function loadForecastInput() {
       sb.from('parent_companies').select('*'),
       sb.from('parent_company_patterns').select('*'),
       sb.from('borrower_parent_mapping').select('*'),
+      sb.from('payoff_schedules').select('*'),
     ])
 
   return {
@@ -131,6 +132,7 @@ async function loadForecastInput() {
     parentCompanies: (parents.data ?? []) as ParentCompany[],
     parentCompanyPatterns: (patterns.data ?? []) as ParentCompanyPattern[],
     borrowerParentMappings: (mappings.data ?? []) as BorrowerParentMapping[],
+    payoffSchedules: (payoff.data ?? []) as PayoffSchedule[],
     settings: settings as ForecastSettings,
     versionLabel: version.label,
     asOfDate: (version.as_of_date as string | null)
@@ -182,6 +184,9 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     return {
       as_of_date: result.as_of_date,
       version_label: result.version_label,
+      // 'maturity' = loans pay off at their due date; 'historical' = at funded
+      // + the assumed payoff months per parent company × loan type.
+      payoff_mode: result.payoff_mode,
       total_active_loans: result.total_active_loans,
       month_zero_fraction: result.reconciliation.month_zero_fraction,
       current_month: trimMonth(m0),

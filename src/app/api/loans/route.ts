@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 import { UNASSIGNED_PARENT_KEY } from '@/lib/calculator'
 import { fetchAll } from '@/lib/fetch-all'
-import type { Loan, LoanProgram } from '@/lib/types'
+import type { Loan, LoanProgram, PayoffSchedule } from '@/lib/types'
 import { format, startOfMonth } from 'date-fns'
 
 // Kept explicit: Next 15 no longer caches GET route handlers by default, but
@@ -48,6 +48,7 @@ export async function GET() {
       { data: patterns },
       { data: mappings },
       { data: programs },
+      { data: payoffSchedules },
     ] = await Promise.all([
       fetchAll<Loan>(sb.from('loans').select('*').eq('version_id', version.id)),
       sb.from('parent_companies').select('id, name'),
@@ -56,6 +57,9 @@ export async function GET() {
       // The draw curves existing loans draw up along — the same rows the
       // forecast engine reads, so this tab's projection matches the Dashboard.
       sb.from('loan_programs').select('*'),
+      // Historical payoff assumptions (migration 023). Errors → none, which
+      // leaves every loan on its maturity payoff.
+      sb.from('payoff_schedules').select('*'),
     ])
     if (le) throw le
 
@@ -110,6 +114,10 @@ export async function GET() {
       })(),
       loanPrograms: (programs ?? []) as LoanProgram[],
       horizonMonths: settings?.horizon_months ?? 17,
+      // Maturity / Historical switch — the page builds each loan's payoff plan
+      // from these with the engine's own buildLoanPayoffPlans.
+      payoffMode: settings?.payoff_mode === 'historical' ? 'historical' : 'maturity',
+      payoffSchedules: (payoffSchedules ?? []) as PayoffSchedule[],
       parent_companies: parentsList,
       parent_loan_counts: parentLoanCounts,
     })

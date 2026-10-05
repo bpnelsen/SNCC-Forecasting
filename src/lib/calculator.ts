@@ -24,6 +24,9 @@ import {
   ByParentSegmentBalance,
   OriginationProjectDetail,
   OriginationProjectMonth,
+  PayoffMode,
+  PayoffLoanType,
+  PayoffSchedule,
 } from './types'
 
 // Key used in MonthlyBalance.by_parent for loans whose borrower didn't match
@@ -101,6 +104,123 @@ export function effectiveDraw(program: Pick<LoanProgram, 'draw_curve' | 'default
     deadMonths: Math.max(0, curve.length - live),
     clamped: liveSum > 1,
   }
+}
+
+// ─── Historical payoff (Maturity / Historical switch) ───────────────────────
+//
+// In 'historical' mode a loan pays off at funded date + N months, where N comes
+// from payoff_schedules for its parent company × loan type (migration 023),
+// instead of at current_loan_due_date. The program's draw curve is prorated so
+// the draw that took the program's maturity term now fits inside N months.
+//
+// Falls back to maturity behaviour — no plan — when there is no schedule row,
+// no funded date, or the assumed payoff month is already behind the forecast
+// start (an older loan that outlived its assumed payoff runs to maturity).
+
+export const PAYOFF_LOAN_TYPES: PayoffLoanType[] = ['SFR', 'OTC', 'MFR', 'A&D', 'RAW_LAND', 'FINISHED_LOTS']
+
+// Program product type → the loan type whose payoff schedule a forecast cohort
+// follows. OTHER has no schedule.
+const PRODUCT_TYPE_TO_PAYOFF_TYPE: Partial<Record<ProductType, PayoffLoanType>> = {
+  SF: 'SFR', MF: 'MFR', AD: 'A&D', RAW_LAND: 'RAW_LAND', LOT: 'FINISHED_LOTS',
+}
+
+/**
+ * Assumed payoff months for a parent × loan type. The parent's own row wins,
+ * then the default row (parent_company_id null). null = no assumption, so the
+ * loan keeps its maturity payoff.
+ */
+export function payoffMonthsFor(
+  schedules: PayoffSchedule[],
+  parentId: string | null,
+  loanType: LoanType,
+): number | null {
+  const valid = (r: PayoffSchedule) => r.loan_type === loanType && Number(r.payoff_months) > 0
+  const own = parentId && parentId !== UNASSIGNED_PARENT_KEY
+    ? schedules.find(r => valid(r) && r.parent_company_id === parentId)
+    : undefined
+  const row = own ?? schedules.find(r => valid(r) && !r.parent_company_id)
+  return row ? Math.floor(Number(row.payoff_months)) : null
+}
+
+/**
+ * A draw curve compressed (or stretched) from `fromTerm` months to `toTerm`
+ * months. Cumulative draw is treated as linear within each month, and the new
+ * curve samples it at fromTerm / toTerm original months per new month, so
+ * what the original reached by month `fromTerm` the new one reaches by month
+ * `toTerm`. The total is preserved, so the loan's peak draw is unchanged.
+ */
+export function prorateDrawCurve(curve: number[], fromTerm: number, toTerm: number): number[] {
+  const entries = (curve ?? []).map(v => Number(v) || 0)
+  if (entries.length === 0 || !(fromTerm > 0) || !(toTerm > 0) || fromTerm === toTerm) return entries
+  const scale = fromTerm / toTerm
+  const cumAt = (x: number): number => {
+    const whole = Math.min(entries.length, Math.floor(x))
+    let sum = 0
+    for (let k = 0; k < whole; k++) sum += entries[k]
+    if (whole < entries.length) sum += entries[whole] * (x - whole)
+    return sum
+  }
+  const length = Math.ceil(entries.length / scale - 1e-9)
+  return Array.from({ length }, (_, k) => cumAt((k + 1) * scale) - cumAt(k * scale))
+}
+
+// Program with its term replaced by `months` and its curve prorated to match.
+export function programForPayoffMonths(program: LoanProgram, months: number): LoanProgram {
+  return {
+    ...program,
+    default_term_months: months,
+    draw_curve: prorateDrawCurve(program.draw_curve, program.default_term_months, months),
+  }
+}
+
+// How one imported loan pays off in historical mode.
+export interface LoanPayoffPlan {
+  payoff_date: string           // YYYY-MM-DD — replaces current_loan_due_date
+  payoff_months: number
+  curve: number[] | null        // prorated draw curve; null = no curve to draw along
+}
+
+export function loanPayoffPlan(
+  loan: Loan,
+  parentId: string | null,
+  schedules: PayoffSchedule[],
+  programs: LoanProgram[],
+  startDate: Date,
+): LoanPayoffPlan | null {
+  if (!loan.loan_funded_date) return null
+  const months = payoffMonthsFor(schedules, parentId, loan.loan_type)
+  if (months == null) return null
+  const payoff = addMonths(parseISO(loan.loan_funded_date), months)
+  if (isNaN(payoff.getTime()) || payoff < startOfMonth(startDate)) return null
+  const program = drawProgramForLoanType(loan.loan_type, programs)
+  return {
+    payoff_date: format(payoff, 'yyyy-MM-dd'),
+    payoff_months: months,
+    curve: program ? programForPayoffMonths(program, months).draw_curve : null,
+  }
+}
+
+/**
+ * Payoff plans for every imported loan, keyed by the loan object. Empty in
+ * maturity mode. parentIdOf resolves a loan's parent company the same way the
+ * engine does (borrower overrides, then patterns).
+ */
+export function buildLoanPayoffPlans(
+  loans: Loan[],
+  mode: PayoffMode | undefined,
+  parentIdOf: (loan: Loan) => string | null,
+  schedules: PayoffSchedule[],
+  programs: LoanProgram[],
+  startDate: Date,
+): Map<Loan, LoanPayoffPlan> {
+  const plans = new Map<Loan, LoanPayoffPlan>()
+  if (mode !== 'historical') return plans
+  for (const loan of loans) {
+    const plan = loanPayoffPlan(loan, parentIdOf(loan), schedules, programs, startDate)
+    if (plan) plans.set(loan, plan)
+  }
+  return plans
 }
 
 // ─── Module 1: Land Bucket Engine ────────────────────────────────────────────
@@ -314,15 +434,18 @@ function finishedLotsReleasedByMonth(loan: Loan, i: number): number {
 // projected_balance) and pays down linearly by original_loan_amount /
 // release_period_months per month from the forecast start. Migration 015.
 //
-// Returns 0 once the loan matures (monthDate >= current_loan_due_date).
+// Returns 0 once the loan matures (monthDate >= current_loan_due_date), or in
+// historical mode once it reaches its assumed payoff date (plan.payoff_date).
 function projectExistingLoanBalance(
   loan: Loan,
   monthDate: Date,
   _programs: LoanProgram[],
   startDate: Date,
+  plan: LoanPayoffPlan | null = null,
 ): number {
-  if (loan.current_loan_due_date) {
-    const dueDate = parseISO(loan.current_loan_due_date)
+  const due = plan?.payoff_date ?? loan.current_loan_due_date
+  if (due) {
+    const dueDate = parseISO(due)
     if (monthDate >= dueDate) return 0
   }
 
@@ -358,30 +481,36 @@ function projectExistingLoanBalance(
 // that already happened before the forecast start.
 //
 // FINISHED_LOTS: linear paydown rule applies independent of maturity.
+//
+// Historical mode (plan given): plan.payoff_date replaces the maturity date —
+// for Finished Lots too, which then pay down linearly AND pay off in full at
+// that date — and the loan draws along plan.curve, the program curve prorated
+// to the assumed payoff term.
 export function projectExistingLoanOutstanding(
   loan: Loan,
   monthDate: Date,
   startDate: Date,
   programs: LoanProgram[] = [],
+  plan: LoanPayoffPlan | null = null,
 ): number {
+  const isMonthZero =
+    monthDate.getFullYear() === startDate.getFullYear() &&
+    monthDate.getMonth() === startDate.getMonth()
+  if (!isMonthZero && plan && monthDate >= parseISO(plan.payoff_date)) return 0
   if (loan.loan_type === 'FINISHED_LOTS') {
     const start = Math.max(loan.loan_amount_disbursed, loan.current_loan_amount, 0)
     const i = monthsBetween(startDate, monthDate)
     return Math.max(0, start - finishedLotsReleasedByMonth(loan, i))
   }
-  const isMonthZero =
-    monthDate.getFullYear() === startDate.getFullYear() &&
-    monthDate.getMonth() === startDate.getMonth()
-  if (!isMonthZero && loan.current_loan_due_date) {
+  if (!isMonthZero && !plan && loan.current_loan_due_date) {
     const dueDate = parseISO(loan.current_loan_due_date)
     if (monthDate >= dueDate) return 0
   }
   const disbursed = loan.loan_amount_disbursed > 0 ? loan.loan_amount_disbursed : 0
   // Month 0 is the loan report itself, so the Active rows tie the tile.
   if (isMonthZero) return disbursed
-  const program = drawProgramForLoanType(loan.loan_type, programs)
-  return drawnUpBalance(loan, disbursed, format(monthDate, 'yyyy-MM'), format(startDate, 'yyyy-MM'),
-                        program?.draw_curve ?? null)
+  const curve = plan ? plan.curve : drawProgramForLoanType(loan.loan_type, programs)?.draw_curve ?? null
+  return drawnUpBalance(loan, disbursed, format(monthDate, 'yyyy-MM'), format(startDate, 'yyyy-MM'), curve)
 }
 
 // Which loan program's draw curve an imported loan follows, by loan type.
@@ -798,6 +927,9 @@ export interface ForecastInput {
   parentCompanies: ParentCompany[]
   parentCompanyPatterns: ParentCompanyPattern[]
   borrowerParentMappings: BorrowerParentMapping[]
+  // Historical payoff assumptions (migration 023). Only read when
+  // settings.payoff_mode === 'historical'.
+  payoffSchedules?: PayoffSchedule[]
   settings: ForecastSettings
   versionLabel: string
   asOfDate: string
@@ -836,6 +968,38 @@ export function runForecast(input: ForecastInput): ForecastResult {
 
   const buildersById = new Map(input.builders.map(b => [b.id, b]))
   const programsById = new Map(input.loanPrograms.map(p => [p.id, p]))
+
+  // Resolve borrower → parent_company_id. Explicit overrides win, then
+  // case-insensitive substring patterns, otherwise UNASSIGNED_PARENT_KEY.
+  const parentByBorrower = new Map<string, string>()
+  {
+    const overrides = new Map(input.borrowerParentMappings.map(m => [m.borrower, m.parent_company_id]))
+    const patternsByParent: { parentId: string; pattern: string }[] =
+      input.parentCompanyPatterns.map(p => ({ parentId: p.parent_company_id, pattern: p.pattern.toLowerCase() }))
+    const distinctBorrowers = new Set(input.loans.map(l => l.borrower).filter((b): b is string => !!b))
+    for (const borrower of distinctBorrowers) {
+      const explicit = overrides.get(borrower)
+      if (explicit) { parentByBorrower.set(borrower, explicit); continue }
+      const haystack = borrower.toLowerCase()
+      const match = patternsByParent.find(p => p.pattern.length > 0 && haystack.includes(p.pattern))
+      parentByBorrower.set(borrower, match ? match.parentId : UNASSIGNED_PARENT_KEY)
+    }
+  }
+  const parentIdFor = (loan: Loan): string =>
+    (loan.borrower && parentByBorrower.get(loan.borrower)) || UNASSIGNED_PARENT_KEY
+
+  // Maturity / Historical switch. In historical mode each imported loan with a
+  // payoff assumption gets a plan (assumed payoff date + prorated draw curve),
+  // and existingFace / existingOut read it everywhere an imported loan is
+  // valued, so totals, parent slices, income and payoffs all agree.
+  const payoffMode: PayoffMode = input.settings.payoff_mode === 'historical' ? 'historical' : 'maturity'
+  const payoffSchedules = input.payoffSchedules ?? []
+  const loanPlans = buildLoanPayoffPlans(
+    input.loans, payoffMode, parentIdFor, payoffSchedules, input.loanPrograms, startDate)
+  const existingFace = (l: Loan, d: Date) =>
+    projectExistingLoanBalance(l, d, input.loanPrograms, startDate, loanPlans.get(l) ?? null)
+  const existingOut = (l: Loan, d: Date) =>
+    projectExistingLoanOutstanding(l, d, startDate, input.loanPrograms, loanPlans.get(l) ?? null)
 
   const lb = runLandBucket(input.landBucketProjects, buildersById, programsById, months)
   const monthIndexByKey = new Map(months.map((m, i) => [m.key, i]))
@@ -878,7 +1042,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     .filter(l => l.loan_type === 'A&D')
     .map<AAndDLoanSchedule>(l => {
       const monthsOut: AAndDLoanMonth[] = months.map(m => {
-        const bal = projectExistingLoanBalance(l, m.date, input.loanPrograms, startDate)
+        const bal = existingFace(l, m.date)
         return {
           month: m.key,
           label: m.label,
@@ -900,7 +1064,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
         ),
         months: monthsOut,
         imported_borrower: l.borrower || null,
-        imported_maturity_date: l.current_loan_due_date,
+        imported_maturity_date: loanPlans.get(l)?.payoff_date ?? l.current_loan_due_date,
         imported_current_loan_amount: l.current_loan_amount,
       }
     })
@@ -994,6 +1158,25 @@ export function runForecast(input: ForecastInput): ForecastResult {
   }
   const allOriginations: LotOrigination[] = [...lb.lotOriginations, ...scheduledOriginations]
 
+  // Historical mode: a cohort pays off after its builder's parent company's
+  // assumed payoff months instead of the program term, drawing along the
+  // program curve prorated to fit. Swapping orig.program in place keeps every
+  // reader (balances, income, payoffs at term, project detail) consistent.
+  if (payoffMode === 'historical') {
+    const adjusted = new Map<string, LoanProgram>()
+    for (const orig of allOriginations) {
+      const loanType = PRODUCT_TYPE_TO_PAYOFF_TYPE[orig.program.product_type]
+      if (!loanType) continue
+      const parentId = orig.builder_id ? buildersById.get(orig.builder_id)?.parent_company_id ?? null : null
+      const months = payoffMonthsFor(payoffSchedules, parentId, loanType)
+      if (months == null) continue
+      const key = `${orig.program.id}:${months}`
+      let program = adjusted.get(key)
+      if (!program) { program = programForPayoffMonths(orig.program, months); adjusted.set(key, program) }
+      orig.program = program
+    }
+  }
+
   // Count / dollar amount of scheduled new originations *at their origination
   // month* so the Forecast page can show what was actually scheduled (the
   // land-bucket counts in lb.totals only cover lot-driven verticals).
@@ -1024,25 +1207,6 @@ export function runForecast(input: ForecastInput): ForecastResult {
 
   const sumDisbursed = (loans: Loan[]) =>
     loans.reduce((s, l) => s + (l.loan_amount_disbursed || 0), 0)
-
-  // Resolve borrower → parent_company_id. Explicit overrides win, then
-  // case-insensitive substring patterns, otherwise UNASSIGNED_PARENT_KEY.
-  const parentByBorrower = new Map<string, string>()
-  {
-    const overrides = new Map(input.borrowerParentMappings.map(m => [m.borrower, m.parent_company_id]))
-    const patternsByParent: { parentId: string; pattern: string }[] =
-      input.parentCompanyPatterns.map(p => ({ parentId: p.parent_company_id, pattern: p.pattern.toLowerCase() }))
-    const distinctBorrowers = new Set(input.loans.map(l => l.borrower).filter((b): b is string => !!b))
-    for (const borrower of distinctBorrowers) {
-      const explicit = overrides.get(borrower)
-      if (explicit) { parentByBorrower.set(borrower, explicit); continue }
-      const haystack = borrower.toLowerCase()
-      const match = patternsByParent.find(p => p.pattern.length > 0 && haystack.includes(p.pattern))
-      parentByBorrower.set(borrower, match ? match.parentId : UNASSIGNED_PARENT_KEY)
-    }
-  }
-  const parentIdFor = (loan: Loan): string =>
-    (loan.borrower && parentByBorrower.get(loan.borrower)) || UNASSIGNED_PARENT_KEY
 
   // Builder → parent_company_id (migration 013) — used to attribute every
   // builder-spawned entity (forecasted cohorts, Land Bucket starting balance,
@@ -1103,7 +1267,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     const m = months[i]
 
     const sumExisting = (loans: Loan[]) =>
-      loans.reduce((s, l) => s + projectExistingLoanBalance(l, m.date, input.loanPrograms, startDate), 0)
+      loans.reduce((s, l) => s + existingFace(l, m.date), 0)
 
     const sfr_existing = sumExisting(sfrLoans)
     const mfr_existing = sumExisting(loansByType.MFR)
@@ -1173,7 +1337,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     // Outstanding (drawn) per segment: existing loans valued at disbursed
     // (decays at maturity) + forecasted cohorts (already a drawn balance).
     const sumExistingOut = (loans: Loan[]) =>
-      loans.reduce((s, l) => s + projectExistingLoanOutstanding(l, m.date, startDate, input.loanPrograms), 0)
+      loans.reduce((s, l) => s + existingOut(l, m.date), 0)
     // Active = imported-loan drawn balance per segment. Memoized so the
     // outstanding_<seg> sums and the MonthlyBalance.active_<seg> exports
     // read the same value.
@@ -1338,8 +1502,8 @@ export function runForecast(input: ForecastInput): ForecastResult {
     for (const loan of input.loans) {
       if (!ACTIVE_ROW_TYPES.has(loan.loan_type)) continue
       const seg = loanTypeToSegment[loan.loan_type]
-      const face  = projectExistingLoanBalance(loan, m.date, input.loanPrograms, startDate)
-      const drawn = projectExistingLoanOutstanding(loan, m.date, startDate, input.loanPrograms)
+      const face  = existingFace(loan, m.date)
+      const drawn = existingOut(loan, m.date)
       if (face === 0 && drawn > 0) portfolio_gap.past_maturity[seg] -= drawn
       else portfolio_gap.undrawn[seg] += face - drawn
     }
@@ -1354,7 +1518,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
       // Interest accrues on what's drawn, not on the commitment — and so rises
       // as the loan draws up. Previously on face (projectExistingLoanBalance),
       // which charged interest on money never advanced.
-      const bal = projectExistingLoanOutstanding(loan, m.date, startDate, input.loanPrograms)
+      const bal = existingOut(loan, m.date)
       const rate = loan.current_interest_rate > 0 ? loan.current_interest_rate : input.settings.default_rate_vertical
       yield_active += bal * rate / 12
     }
@@ -1421,7 +1585,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     }
     for (const loan of input.loans) {
       const key = loan.id ?? loan.loan_number
-      const curr = projectExistingLoanOutstanding(loan, m.date, startDate, input.loanPrograms)
+      const curr = existingOut(loan, m.date)
       const prev = prevExistingBalances.get(key) ?? 0
       const seg = loanTypeToSegment[loan.loan_type]
       const inActiveRows = ACTIVE_ROW_TYPES.has(loan.loan_type)
@@ -1438,7 +1602,8 @@ export function runForecast(input: ForecastInput): ForecastResult {
           // A loan already past maturity when the forecast starts stays on the
           // books in month 0 (so the rows tie the tile) and drops out in month
           // 1 — all of them at once. Split out so that cliff is visible.
-          const due = loan.current_loan_due_date ? parseISO(loan.current_loan_due_date) : null
+          const dueKey = loanPlans.get(loan)?.payoff_date ?? loan.current_loan_due_date
+          const due = dueKey ? parseISO(dueKey) : null
           const bucket = due && due < months[0].date ? 'past_maturity' : 'maturing'
           active_change[bucket][seg] -= prev
         } else if (curr > prev) {
@@ -1622,6 +1787,7 @@ export function runForecast(input: ForecastInput): ForecastResult {
     months: monthly,
     as_of_date: input.asOfDate,
     version_label: input.versionLabel,
+    payoff_mode: payoffMode,
     total_active_loans: input.loans.length,
     unclassified_loan_count: loansByType.UNKNOWN.length,
     no_maturity_loan_count: input.loans.filter(l => !l.current_loan_due_date).length,

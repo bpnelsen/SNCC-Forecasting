@@ -16,6 +16,7 @@ import {
   ParentCompany,
   ParentCompanyPattern,
   BorrowerParentMapping,
+  PayoffSchedule,
 } from '@/lib/types'
 
 // Kept explicit: Next 15 no longer caches GET route handlers by default, but
@@ -91,7 +92,7 @@ export async function GET(req: Request) {
       }, { status: 500 })
     }
 
-    const [loansRes, buildersRes, programsRes, projectsRes, origsRes, hhhJvRes, aAndDRes, parentsRes, patternsRes, mappingsRes] = await Promise.all([
+    const [loansRes, buildersRes, programsRes, projectsRes, origsRes, hhhJvRes, aAndDRes, parentsRes, patternsRes, mappingsRes, payoffRes] = await Promise.all([
       fetchAll<Loan>(sb.from('loans').select('*').eq('version_id', version.id)),
       sb.from('builders').select('*'),
       sb.from('loan_programs').select('*'),
@@ -102,6 +103,7 @@ export async function GET(req: Request) {
       sb.from('parent_companies').select('*'),
       sb.from('parent_company_patterns').select('*'),
       sb.from('borrower_parent_mapping').select('*'),
+      sb.from('payoff_schedules').select('*'),
     ])
 
     if (loansRes.error)    throw loansRes.error
@@ -131,6 +133,11 @@ export async function GET(req: Request) {
     const borrowerParentMappings: BorrowerParentMapping[] = mappingsRes.error
       ? []
       : ((mappingsRes.data ?? []) as BorrowerParentMapping[])
+    // Historical payoff schedules (migration 023) — same graceful fallback;
+    // without them historical mode behaves exactly like maturity.
+    const payoffSchedules: PayoffSchedule[] = payoffRes.error
+      ? []
+      : ((payoffRes.data ?? []) as PayoffSchedule[])
 
     const result = runForecast({
       loans:               (loansRes.data    ?? []) as Loan[],
@@ -143,6 +150,7 @@ export async function GET(req: Request) {
       parentCompanies,
       parentCompanyPatterns,
       borrowerParentMappings,
+      payoffSchedules,
       settings:            horizon == null
                              ? settings as ForecastSettings
                              : { ...(settings as ForecastSettings), horizon_months: horizon },

@@ -3,10 +3,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { addMonths, format, parseISO } from 'date-fns'
 import { CreditCard, AlertCircle, Search, Filter } from 'lucide-react'
-import { Loan, LoanType, LoanProgram } from '@/lib/types'
+import { Loan, LoanType, LoanProgram, PayoffMode, PayoffSchedule } from '@/lib/types'
 import { formatCurrency } from '@/lib/utils'
 import { ParentCompanyDropdown } from '@/components/ui/ParentCompanyDropdown'
-import { UNASSIGNED_PARENT_KEY, projectExistingLoanOutstanding } from '@/lib/calculator'
+import {
+  UNASSIGNED_PARENT_KEY, projectExistingLoanOutstanding, buildLoanPayoffPlans, type LoanPayoffPlan,
+} from '@/lib/calculator'
 
 // /api/loans enriches each Loan with parent_id (resolved via the same
 // borrower → parent attribution the engine uses) and parent_name (null
@@ -61,12 +63,16 @@ interface LoansResponse {
   loanPrograms?: LoanProgram[]
   parent_companies?: { id: string; name: string }[]
   parent_loan_counts?: Record<string, number>
+  payoffMode?: PayoffMode
+  payoffSchedules?: PayoffSchedule[]
 }
 
 // Each loan's balance per month comes from the forecast engine's own
 // projectExistingLoanOutstanding, so this grid matches the Dashboard's Active
 // rows: disbursed this month, then drawing up along the program's draw curve
-// to its maximum until maturity (Finished Lots pay down instead).
+// to its maximum until maturity (Finished Lots pay down instead). In
+// Historical mode each loan's payoff plan — assumed payoff date and prorated
+// curve — comes from the engine's buildLoanPayoffPlans, same as the Dashboard.
 
 export default function LoansPage() {
   const [data, setData]       = useState<LoansResponse | null>(null)
@@ -161,15 +167,24 @@ export default function LoansPage() {
     })
   }, [data, filter, active, selectedParents])
 
+  // Historical-mode payoff plan per loan (empty map in maturity mode).
+  const plans = useMemo(() => {
+    if (!data) return new Map<Loan, LoanPayoffPlan>()
+    return buildLoanPayoffPlans(
+      data.loans, data.payoffMode, l => (l as LoanWithParent).parent_id ?? null,
+      data.payoffSchedules ?? [], data.loanPrograms ?? [], parseISO(data.startDate),
+    )
+  }, [data])
+
   // Per-month grand total across the filtered set.
   const monthTotals = useMemo(() => {
     if (!data || months.length === 0) return []
     const start = parseISO(data.startDate)
     const programs = data.loanPrograms ?? []
     return months.map(m => filteredLoans.reduce(
-      (s, l) => s + projectExistingLoanOutstanding(l, m.date, start, programs), 0,
+      (s, l) => s + projectExistingLoanOutstanding(l, m.date, start, programs, plans.get(l) ?? null), 0,
     ))
-  }, [filteredLoans, months, data])
+  }, [filteredLoans, months, data, plans])
 
   if (loading) return <div className="p-6 text-fg-dim text-sm">Loading…</div>
   if (error) return (
@@ -203,7 +218,9 @@ export default function LoansPage() {
             Loans
           </h1>
           <p className="text-xs text-fg-dim mt-0.5">
-            {data.versionLabel} · {data.loans.length} loans · balances draw up along each program’s draw curve until it ends or the loan matures
+            {data.versionLabel} · {data.loans.length} loans · {data.payoffMode === 'historical'
+              ? 'Historical payoff: loans with an assumed payoff draw up along the prorated curve and pay off at funded + assumed months'
+              : 'balances draw up along each program’s draw curve until it ends or the loan matures'}
           </p>
         </div>
         <div className="relative">
@@ -273,7 +290,7 @@ export default function LoansPage() {
                 <th className="text-right">Current</th>
                 <th className="text-right">Remaining</th>
                 <th>Funded</th>
-                <th>Maturity</th>
+                <th>{data.payoffMode === 'historical' ? 'Payoff' : 'Maturity'}</th>
                 <th className="text-right" title="Finished Lots only — number of lots collateralizing the loan">
                   # Lots
                 </th>
@@ -324,7 +341,16 @@ export default function LoansPage() {
                   <td className="num">{formatCurrency(loan.current_loan_amount, true)}</td>
                   <td className="num">{formatCurrency(loan.loan_amount_remaining, true)}</td>
                   <td className="text-[10px] font-mono">{loan.loan_funded_date ?? '—'}</td>
-                  <td className="text-[10px] font-mono">{loan.current_loan_due_date ?? '—'}</td>
+                  {(() => {
+                    const plan = plans.get(loan)
+                    if (!plan) return <td className="text-[10px] font-mono">{loan.current_loan_due_date ?? '—'}</td>
+                    return (
+                      <td className="text-[10px] font-mono text-accent"
+                          title={`Historical payoff: funded + ${plan.payoff_months} mo · maturity ${loan.current_loan_due_date ?? '—'}`}>
+                        {plan.payoff_date}
+                      </td>
+                    )
+                  })()}
                   {loan.loan_type === 'FINISHED_LOTS' && loan.id ? (
                     <>
                       <td className="num">
@@ -367,8 +393,10 @@ export default function LoansPage() {
                     </>
                   )}
                   {months.map(m => {
-                    const bal = projectExistingLoanOutstanding(loan, m.date, start, programs)
-                    const isPostMaturity = !!loan.current_loan_due_date && m.date >= parseISO(loan.current_loan_due_date)
+                    const plan = plans.get(loan) ?? null
+                    const bal = projectExistingLoanOutstanding(loan, m.date, start, programs, plan)
+                    const due = plan?.payoff_date ?? loan.current_loan_due_date
+                    const isPostMaturity = !!due && m.date >= parseISO(due)
                     return (
                       <td key={m.key} className={`num ${isPostMaturity ? 'text-fg-dim' : ''}`}>
                         {isPostMaturity && bal === 0 ? '—' : formatCurrency(bal, true)}

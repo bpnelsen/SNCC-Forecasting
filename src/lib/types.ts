@@ -233,6 +233,8 @@ export interface ForecastResult {
   months: MonthlyBalance[]
   as_of_date: string
   version_label: string
+  // Payoff assumption this result was computed with (sidebar switch).
+  payoff_mode: PayoffMode
   total_active_loans: number
   // Data-quality counters for the active version. Both conditions quietly
   // distort the forecast, so the dashboard surfaces them rather than leaving
@@ -592,6 +594,26 @@ export interface ForecastSettings {
   default_rate_vertical: number
   default_rate_land: number
   is_active: boolean
+  // Migration 023. Absent on a database that hasn't run it → 'maturity'.
+  payoff_mode?: PayoffMode
+}
+
+// Which payoff assumption the whole app forecasts with (sidebar switch).
+//   maturity   — loans run to current_loan_due_date; cohorts to program term.
+//   historical — loans pay off at funded + PayoffSchedule.payoff_months, with
+//                the program draw curve prorated to fit that term.
+export type PayoffMode = 'maturity' | 'historical'
+
+// Loan types a payoff schedule can be set for (HHH / UNKNOWN have none).
+export type PayoffLoanType = 'SFR' | 'OTC' | 'MFR' | 'A&D' | 'RAW_LAND' | 'FINISHED_LOTS'
+
+// Assumed months from funding to payoff for one parent × loan type
+// (migration 023). parent_company_id null = default for parents with no row.
+export interface PayoffSchedule {
+  id?: string
+  parent_company_id: string | null
+  loan_type: PayoffLoanType
+  payoff_months: number
 }
 
 // ─── Forecast outputs for Module 1 (Land Bucket) ────────────────────────────

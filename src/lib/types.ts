@@ -164,9 +164,9 @@ export interface MonthlyBalance {
   new_originations_amount: number
   payoffs_count: number
   payoffs_amount: number
-  // Per-segment breakdown of payoffs_amount so the Forecast page can filter
-  // the Payoffs column by the product-type chip strip. Includes both imported
-  // loan maturities AND forecasted cohort payoffs at end-of-term.
+  // Per-segment breakdown of payoffs_amount: imported loans maturing plus
+  // every cohort reaching term, each at the drawn balance it leaves with (not
+  // face). Includes Land-Bucket-driven cohorts, matching total_loans.
   payoffs_by_segment: {
     sfr: number
     mfr: number
@@ -175,13 +175,66 @@ export interface MonthlyBalance {
     finished_lots: number
     hhh: number
   }
+  // The same, excluding Land-Bucket-driven cohorts, so it matches Total
+  // Outstanding (Loans). The Forecast tab's Payoffs column reads this.
+  payoffs_loans_by_segment: {
+    sfr: number
+    mfr: number
+    and: number
+    raw_land: number
+    finished_lots: number
+    hhh: number
+  }
   cash_flow: number
+  // Change in the Active rows (Σ active_<seg>) from the previous month, by
+  // cause. Each record is per segment; all zero in month 0. Summed over the
+  // three causes and the segments, it equals Σ active_<seg> this month minus
+  // last month exactly.
+  active_change: ActiveChange
+  // Why Total Portfolio (All) differs from Total Outstanding (All), per
+  // segment. Summed, it equals total_all minus Total Outstanding (All).
+  portfolio_gap: PortfolioGap
+}
+
+export interface PortfolioGap {
+  // Existing loans: full loan amount here vs drawn balance in Outstanding.
+  undrawn: ActiveChangeBySegment
+  // Loans past their due date: in Outstanding's month 0, not here (negative).
+  past_maturity: ActiveChangeBySegment
+  // Forecast cohorts in the segment totals but not in Outstanding's forecast
+  // rows: Land Bucket lot-sale verticals, scheduled Raw Land / Finished Lots.
+  extra_forecast: ActiveChangeBySegment
+}
+
+export interface ActiveChange {
+  // Imported loans already past maturity before the forecast's first month.
+  // They stay on the books in month 0 (so the Active rows tie the tile) and
+  // all drop out together in month 1 — negative, and only ever in month 1.
+  past_maturity: ActiveChangeBySegment
+  // Imported loans reaching maturity during the previous month — negative.
+  maturing: ActiveChangeBySegment
+  // Existing loans drawing up along their program's draw curve — positive.
+  draws: ActiveChangeBySegment
+  // Partial changes that aren't a payoff: Finished Lots paying down as lots
+  // release — usually negative.
+  paydown: ActiveChangeBySegment
+}
+
+export interface ActiveChangeBySegment {
+  sfr: number
+  mfr: number
+  and: number
+  raw_land: number
+  finished_lots: number
+  hhh: number
 }
 
 export interface ForecastResult {
   months: MonthlyBalance[]
   as_of_date: string
   version_label: string
+  // Payoff assumption this result was computed with (sidebar switch).
+  payoff_mode: PayoffMode
   total_active_loans: number
   // Data-quality counters for the active version. Both conditions quietly
   // distort the forecast, so the dashboard surfaces them rather than leaving
@@ -249,10 +302,15 @@ export interface ForecastResult {
   // Diagnostic fields surfaced for the dashboard's Reconciliation panel.
   // Lets the UI explain why some identities may not balance to the cent.
   reconciliation: {
-    // Fraction of the current calendar month still ahead of as_of_date
-    // (Truth 4). 0.5 means import was at the half-way point. month-0
-    // Forecasted SFR/MFR is scaled by this.
+    // Share of the current calendar month still ahead of `proration_anchor`
+    // (today). 0.5 on the 15th of a 30-day month, 0 on the last day. Every
+    // forecast source originating this month — SFR, MFR and A&D cohorts and
+    // A&D tab loans — is scaled by this in every month of its life, because
+    // the elapsed share has funded and is in the imported loan report.
     month_zero_fraction: number
+    // The date month_zero_fraction was measured from (YYYY-MM-DD): today, or
+    // the loan report's as_of_date for callers that don't pass one.
+    proration_anchor: string
     // Σ loan_amount_disbursed across imported loans whose maturity date is
     // strictly before the as_of_date. Reported for traceability only: since
     // the "matured loans stay on the books" change, month 0 has no maturity
@@ -342,6 +400,11 @@ export interface LandBucketProject {
   // Optional manual lot-release override. Keys are YYYY-MM, values are the
   // integer lots released that month. When non-empty, overrides absorption_rate.
   lot_release_schedule: Record<string, number>
+  // Projected balance increases (migration 022). YYYY-MM → dollars added at
+  // the start of that month. Months up to and including the current one are
+  // ignored: balance_outstanding already is today's balance. Optional so rows
+  // read before the migration has run still type-check and forecast as before.
+  balance_increase_schedule?: Record<string, number>
   notes: string | null
 }
 
@@ -491,6 +554,11 @@ export interface AAndDLoanSchedule {
   imported_borrower?: string | null
   imported_maturity_date?: string | null
   imported_current_loan_amount?: number
+  // Planned loans only: the share of this loan the forecast carries. 0 when its
+  // origination date is before the current month (it should already be in the
+  // imported loan report), the unelapsed share of the month when it originates
+  // this month, 1 otherwise. The schedule itself is always the full projection.
+  forecast_scale?: number
 }
 
 export interface NewOriginationEntry {  id: string
@@ -526,6 +594,26 @@ export interface ForecastSettings {
   default_rate_vertical: number
   default_rate_land: number
   is_active: boolean
+  // Migration 023. Absent on a database that hasn't run it → 'maturity'.
+  payoff_mode?: PayoffMode
+}
+
+// Which payoff assumption the whole app forecasts with (sidebar switch).
+//   maturity   — loans run to current_loan_due_date; cohorts to program term.
+//   historical — loans pay off at funded + PayoffSchedule.payoff_months, with
+//                the program draw curve prorated to fit that term.
+export type PayoffMode = 'maturity' | 'historical'
+
+// Loan types a payoff schedule can be set for (HHH / UNKNOWN have none).
+export type PayoffLoanType = 'SFR' | 'OTC' | 'MFR' | 'A&D' | 'RAW_LAND' | 'FINISHED_LOTS'
+
+// Assumed months from funding to payoff for one parent × loan type
+// (migration 023). parent_company_id null = default for parents with no row.
+export interface PayoffSchedule {
+  id?: string
+  parent_company_id: string | null
+  loan_type: PayoffLoanType
+  payoff_months: number
 }
 
 // ─── Forecast outputs for Module 1 (Land Bucket) ────────────────────────────
@@ -537,9 +625,13 @@ export interface LandBucketMonth {
   lots_sold_cumulative: number
   lots_remaining: number
   sale_proceeds: number
-  // Balance at the START of the month, before this month's sale activity.
-  // Month 0 = sum of project.balance_outstanding (the Land Bucket tab's
-  // "Grand total"); month i = previous month's ending_balance.
+  // Projected increase applied at the start of this month (balance_increase_
+  // schedule). Always 0 in month 0, whose balance is balance_outstanding.
+  balance_increase: number
+  // Balance at the START of the month, after this month's projected increase
+  // and before its sale activity. Month 0 = sum of project.balance_outstanding
+  // (the Land Bucket tab's "Grand total"); month i = previous month's
+  // ending_balance + this month's increase.
   starting_balance: number
   ending_balance: number
   interest_income: number

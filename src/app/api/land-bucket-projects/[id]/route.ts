@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
+import {
+  MIGRATION_022_MESSAGE, cleanIncreaseSchedule, isMissingIncreaseColumn,
+} from '@/lib/land-bucket-save'
 
 // Supabase / PostgREST errors are plain objects; String(e) collapses them to
 // "[object Object]". Pull out the useful fields.
@@ -36,21 +39,30 @@ function buildPayload(body: Record<string, unknown>): Record<string, unknown> {
   }
 }
 
+// Update with the pre-migration fallback described in lib/land-bucket-save.
+async function updateProject(id: string, body: Record<string, unknown>) {
+  const sb = createServiceClient()
+  const payload = buildPayload(body)
+  const increases = cleanIncreaseSchedule(body.balance_increase_schedule)
+  const run = (row: Record<string, unknown>) =>
+    sb.from('land_bucket_projects').update(row).eq('id', id).select().single()
+
+  let { data, error } = await run({ ...payload, balance_increase_schedule: increases })
+  if (error && isMissingIncreaseColumn(error)) {
+    if (Object.keys(increases).length > 0) {
+      return NextResponse.json({ error: MIGRATION_022_MESSAGE }, { status: 409 })
+    }
+    ;({ data, error } = await run(payload))
+  }
+  if (error) throw error
+  return NextResponse.json(data)
+}
+
 // POST = update by id (PUT-405-safe — Vercel rejects PUT on some setups).
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-
   try {
-    const body = await req.json()
-    const sb   = createServiceClient()
-    const { data, error } = await sb
-      .from('land_bucket_projects')
-      .update(buildPayload(body))
-      .eq('id', id)
-      .select()
-      .single()
-    if (error) throw error
-    return NextResponse.json(data)
+    return await updateProject(id, await req.json())
   } catch (e) {
     return NextResponse.json({ error: errMessage(e) }, { status: 500 })
   }
@@ -59,18 +71,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 // PUT kept for backwards compatibility but not relied on; the page now POSTs.
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-
   try {
-    const body = await req.json()
-    const sb   = createServiceClient()
-    const { data, error } = await sb
-      .from('land_bucket_projects')
-      .update(buildPayload(body))
-      .eq('id', id)
-      .select()
-      .single()
-    if (error) throw error
-    return NextResponse.json(data)
+    return await updateProject(id, await req.json())
   } catch (e) {
     return NextResponse.json({ error: errMessage(e) }, { status: 500 })
   }

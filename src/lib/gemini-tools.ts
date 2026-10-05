@@ -10,7 +10,7 @@ import { createServiceClient } from '@/lib/supabase'
 import { runForecast } from '@/lib/calculator'
 import type {
   ForecastResult, Loan, Builder, LoanProgram, LandBucketProject, HHHJVProject,
-  AAndDLoan, ParentCompany, ParentCompanyPattern, BorrowerParentMapping,
+  AAndDLoan, ParentCompany, ParentCompanyPattern, BorrowerParentMapping, PayoffSchedule,
   NewOriginationEntry, ForecastSettings,
 } from '@/lib/types'
 
@@ -106,7 +106,7 @@ async function loadForecastInput() {
     .from('forecast_settings').select('*').eq('is_active', true).maybeSingle()
   if (!settings) throw new Error('No active forecast_settings row.')
 
-  const [loans, builders, programs, lbProjects, newOrigs, hhhJv, aAndD, parents, patterns, mappings] =
+  const [loans, builders, programs, lbProjects, newOrigs, hhhJv, aAndD, parents, patterns, mappings, payoff] =
     await Promise.all([
       sb.from('loans').select('*').eq('version_id', version.id),
       sb.from('builders').select('*'),
@@ -118,6 +118,7 @@ async function loadForecastInput() {
       sb.from('parent_companies').select('*'),
       sb.from('parent_company_patterns').select('*'),
       sb.from('borrower_parent_mapping').select('*'),
+      sb.from('payoff_schedules').select('*'),
     ])
 
   return {
@@ -131,6 +132,7 @@ async function loadForecastInput() {
     parentCompanies: (parents.data ?? []) as ParentCompany[],
     parentCompanyPatterns: (patterns.data ?? []) as ParentCompanyPattern[],
     borrowerParentMappings: (mappings.data ?? []) as BorrowerParentMapping[],
+    payoffSchedules: (payoff.data ?? []) as PayoffSchedule[],
     settings: settings as ForecastSettings,
     versionLabel: version.label,
     asOfDate: (version.as_of_date as string | null)
@@ -182,6 +184,9 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     return {
       as_of_date: result.as_of_date,
       version_label: result.version_label,
+      // 'maturity' = loans pay off at their due date; 'historical' = at funded
+      // + the assumed payoff months per parent company × loan type.
+      payoff_mode: result.payoff_mode,
       total_active_loans: result.total_active_loans,
       month_zero_fraction: result.reconciliation.month_zero_fraction,
       current_month: trimMonth(m0),
@@ -259,12 +264,18 @@ Domain context (these are TRUE rules, not preferences):
 - Loan segments: SFR (single-family construction), MFR (multifamily), A&D
   (acquisition + development), Raw Land, Finished Lots, OTC (one-time close —
   rolls into SFR for dashboard rollups but kept as its own loan_type).
-- "Active <segment>" = sum of loan_amount_disbursed for imported loans of
-  that type, decaying to 0 at each loan's current_loan_due_date.
+- "Active <segment>" = drawn balance of imported loans of that type. Month 0
+  is loan_amount_disbursed (ties to the Active Loan (Outstanding) tile). Each
+  later month, a loan draws up along its program's draw curve — placed by its
+  loan_funded_date — toward loan amount × the curve's maximum, reaching it
+  when the curve ends, and drops to 0 at its current_loan_due_date. Finished
+  Lots pay down as lots release instead. Loans already past maturity stay in
+  month 0 and all drop out in month 1.
 - "Forecasted SFR/MFR" = drawn balance of new-origination cohorts SCHEDULED
   on the /originations tab — NOT including Land Bucket-spawned verticals.
-  Month 0 is prorated by remaining-month fraction (Truth 4); future months
-  use the full draw curve.
+  A cohort starting this month is carried only for the share of the month
+  still ahead of today, in every month of its life (the rest has funded and
+  is in the loan report); later cohorts are carried in full.
 - HHH/JV is an EQUITY investment sourced from the manual /hhh-jv tab — it
   is NOT a loan. Included in Total Outstanding (All) but excluded from
   Total Outstanding (Loans).

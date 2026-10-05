@@ -3,9 +3,10 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
-  LayoutDashboard, TrendingUp, Settings2, Upload, History, Building2, Landmark, ClipboardList, CreditCard, Handshake, HardHat, ClipboardCheck,
+  LayoutDashboard, TrendingUp, Settings2, Upload, History, Building2, Landmark, ClipboardList, CreditCard, Handshake, HardHat, ClipboardCheck, CalendarClock,
 } from 'lucide-react'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
+import { PayoffModeToggle } from '@/components/ui/PayoffModeToggle'
 
 const nav = [
   { href: '/dashboard',    label: 'Dashboard',       icon: LayoutDashboard },
@@ -17,6 +18,7 @@ const nav = [
   { href: '/a-and-d',      label: 'A&D Loans',       icon: HardHat },
   { href: '/hhh-jv',       label: 'HHH / JV',        icon: Handshake },
   { href: '/assumptions',  label: 'Assumptions',     icon: Settings2 },
+  { href: '/payoff-schedules', label: 'Payoff Schedules', icon: CalendarClock },
   { href: '/import',       label: 'Import',          icon: Upload },
   { href: '/versions',     label: 'Versions',        icon: History },
 ]
@@ -25,8 +27,8 @@ export function Navigation() {
   const path = usePathname()
   return (
     <nav className="w-52 shrink-0 flex flex-col bg-surface border-r border-border py-5">
-      {/* Logo */}
-      <div className="px-5 mb-7">
+      {/* Logo + Maturity / Historical switch */}
+      <div className="px-5 mb-7 space-y-4">
         <div className="flex items-center gap-2.5">
           <div className="w-7 h-7 rounded-lg bg-accent/20 flex items-center justify-center">
             <Building2 className="w-4 h-4 text-accent" />
@@ -36,6 +38,7 @@ export function Navigation() {
             <div className="text-[10px] text-fg-dim leading-none mt-0.5">Forecasting</div>
           </div>
         </div>
+        <PayoffModeToggle />
       </div>
 
       {/* Links */}

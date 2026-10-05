@@ -143,6 +143,8 @@ export default function AAndDPage() {
 
       <ProjectionCard forecast={forecast} loanCount={loans.length} />
 
+      <ProrationNotice forecast={forecast} />
+
       <div className="card fade-up fade-up-2">
         <div className="overflow-x-auto">
           <table className="data-table">
@@ -726,6 +728,68 @@ function ImportedAAndDCard({ forecast }: { forecast: ForecastResult | null }) {
           </tbody>
         </table>
       </div>
+    </div>
+  )
+}
+
+// ─── Loans the forecast leaves out (or only partly carries) ──────────────────
+// A planned loan that should have originated by today is already in the
+// imported loan report, so the engine carries 0% of one dated before this
+// month and only the unelapsed share of one dated this month. Without this
+// notice a loan would vanish from the dashboard totals with no explanation —
+// and a loan whose date simply slipped would look booked when it isn't.
+function ProrationNotice({ forecast }: { forecast: ForecastResult | null }) {
+  if (!forecast) return null
+  const excluded = forecast.a_and_d_schedules.filter(s => s.forecast_scale === 0)
+  const partial = forecast.a_and_d_schedules.filter(
+    s => s.forecast_scale != null && s.forecast_scale > 0 && s.forecast_scale < 1,
+  )
+  if (excluded.length === 0 && partial.length === 0) return null
+  const monthLabel = forecast.months[0]?.label ?? 'this month'
+
+  return (
+    <div className="card fade-up fade-up-2 p-4 space-y-2 text-xs">
+      {excluded.length > 0 && (
+        <div>
+          <div className="text-fg font-medium flex items-center gap-1.5">
+            <AlertCircle className="w-3.5 h-3.5 text-danger" />
+            {excluded.length} loan(s) left out of the forecast — dated before {monthLabel}
+          </div>
+          <p className="text-fg-dim mt-1">
+            A loan that originated before this month should already be in the imported loan report, so
+            counting it here as well would count it twice. If one hasn&rsquo;t actually funded yet, move its
+            origination date forward and it comes back into the forecast.
+          </p>
+          <ul className="mt-1.5 space-y-0.5 font-mono text-[11px]">
+            {excluded.map(s => (
+              <li key={s.loan_id} className="text-fg">
+                {s.loan_name}
+                <span className="text-fg-dim">
+                  {' '}— would have added {formatCurrency(s.months[0]?.starting_balance ?? 0, true)} to {monthLabel}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {partial.length > 0 && (
+        <div>
+          <div className="text-fg font-medium">
+            {partial.length} loan(s) originating in {monthLabel} carried in part
+          </div>
+          <p className="text-fg-dim mt-1">
+            Only the part of the month still ahead of today is forecast; the rest counts as funded and in the loan report.
+          </p>
+          <ul className="mt-1.5 space-y-0.5 font-mono text-[11px]">
+            {partial.map(s => (
+              <li key={s.loan_id} className="text-fg">
+                {s.loan_name}
+                <span className="text-fg-dim"> — {((s.forecast_scale ?? 0) * 100).toFixed(1)}% carried</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }

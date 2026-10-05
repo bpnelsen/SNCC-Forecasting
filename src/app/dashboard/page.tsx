@@ -6,13 +6,17 @@ import { StatCard } from '@/components/ui/StatCard'
 import { TotalBalanceChart, PortfolioStackedChart, IncomeChart, VarianceChart } from '@/components/charts/PortfolioCharts'
 import { ForecastResult, MonthlyBalance } from '@/lib/types'
 import { formatCurrency, formatPct, formatVariance } from '@/lib/utils'
-import { RefreshCw, AlertCircle, Filter, MessageSquare } from 'lucide-react'
+import { RefreshCw, AlertCircle, Filter, MessageSquare, ChevronDown, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
 import { ParentCompanyDropdown } from '@/components/ui/ParentCompanyDropdown'
 import { UNASSIGNED_PARENT_KEY } from '@/lib/calculator'
+import { HORIZON_OPTIONS, DEFAULT_HORIZON, parseHorizon, type Horizon } from '@/lib/horizon'
 import {
   type FilterKey, type FilterChip, CHIPS, ALL_KEYS, applyFilter,
 } from '@/lib/dashboard-filter'
+import {
+  activeOnBooks, forecastedAnd, forecastLayer, totalOutstandingLoans, totalOutstandingAll, monthBridge, portfolioBreakdown,
+} from '@/lib/summary'
 
 // Render the active version's as_of_date (YYYY-MM-DD from the engine) as
 // "May 14, 2026". Parsed manually so timezone shifts can't bump it by a day.
@@ -28,6 +32,8 @@ function formatAsOf(iso: string | null | undefined): string {
 }
 
 
+const HORIZON_STORAGE_KEY = 'sncc.dashboard.horizon'
+
 export default function DashboardPage() {
   const [data, setData]       = useState<ForecastResult | null>(null)
   const [loading, setLoading] = useState(true)
@@ -41,30 +47,66 @@ export default function DashboardPage() {
   // segment, respecting the parent + chip filters.
   const [breakdownMode, setBreakdownMode] = useState<'dollar' | 'count'>('dollar')
 
-  const load = async () => {
+  // Projection horizon: the forecast is recomputed for exactly this many
+  // months (?horizon=), so the Peak, the charts and the Monthly Summary cover
+  // only the chosen span. Remembered per browser; storage can be unavailable
+  // (private windows), in which case the default simply applies.
+  const [horizon, setHorizon] = useState<Horizon>(DEFAULT_HORIZON)
+  const [horizonReady, setHorizonReady] = useState(false)
+  // Each load gets an id; only the latest may write state, so quick clicks
+  // through 6 → 24 can't leave an older, slower response on screen.
+  const requestId = useRef(0)
+
+  const load = async (h: Horizon = horizon) => {
+    const id = ++requestId.current
     setLoading(true); setError(null)
     try {
-      const res = await fetch('/api/calculate', { cache: 'no-store' })
+      const res = await fetch(`/api/calculate?horizon=${h}`, { cache: 'no-store' })
       if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Failed') }
-      setData(await res.json())
+      const json = await res.json()
+      if (id === requestId.current) setData(json)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load')
-    } finally { setLoading(false) }
+      if (id === requestId.current) setError(e instanceof Error ? e.message : 'Failed to load')
+    } finally {
+      if (id === requestId.current) setLoading(false)
+    }
   }
 
-  useEffect(() => { load() }, [])
+  // Read the remembered horizon after mount (the page is prerendered, so
+  // reading storage during render would mismatch), then load with it.
+  useEffect(() => {
+    try {
+      const stored = parseHorizon(window.localStorage.getItem(HORIZON_STORAGE_KEY))
+      if (stored) setHorizon(stored)
+    } catch { /* storage unavailable — keep the default */ }
+    setHorizonReady(true)
+  }, [])
+
+  useEffect(() => {
+    if (horizonReady) load(horizon)
+    // load is recreated each render; horizon is what should trigger a reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [horizonReady, horizon])
+
+  const chooseHorizon = (h: Horizon) => {
+    if (h === horizon) return
+    setHorizon(h)
+    try { window.localStorage.setItem(HORIZON_STORAGE_KEY, String(h)) } catch { /* ignore */ }
+  }
 
   const months = useMemo(
     () => data ? applyFilter(data.months, active, selectedParents) : [],
     [data, active, selectedParents],
   )
 
-  if (loading) return <LoadingState />
-  if (error)   return <ErrorState message={error} onRetry={load} />
+  if (loading && !data) return <LoadingState />
+  if (error)   return <ErrorState message={error} onRetry={() => load(horizon)} />
   if (!data)   return null
 
   const current = months[0]
-  const peak    = months.reduce((a, b) => b.total_all > a.total_all ? b : a, months[0])
+  // The headline tile is Total Outstanding (All), the same figure as that row
+  // of the Monthly Summary, so its Peak is taken on the same basis.
+  const peak    = months.reduce((a, b) => totalOutstandingAll(b) > totalOutstandingAll(a) ? b : a, months[0])
   const chipsFiltered  = active.size < CHIPS.length
   const parentsFiltered = selectedParents !== null
   const filtered = chipsFiltered || parentsFiltered
@@ -112,11 +154,29 @@ export default function DashboardPage() {
             {data.version_label} · {data.total_active_loans} active loans · As of {formatAsOf(data.as_of_date)}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <div className="flex items-center gap-1.5" role="group" aria-label="Projection horizon">
+            <span className="text-[10px] text-fg-dim">Project out</span>
+            <div className="inline-flex rounded-lg border border-border-strong overflow-hidden">
+              {HORIZON_OPTIONS.map(h => (
+                <button
+                  key={h}
+                  type="button"
+                  onClick={() => chooseHorizon(h)}
+                  aria-pressed={h === horizon}
+                  className={`px-2.5 py-1 text-[11px] font-medium transition-colors border-l border-border-strong first:border-l-0
+                    ${h === horizon ? 'bg-accent/15 text-accent' : 'text-fg-dim hover:text-fg hover:bg-border'}`}
+                >
+                  {h} mo
+                </button>
+              ))}
+            </div>
+            {loading && <RefreshCw className="w-3 h-3 text-fg-dim animate-spin" aria-label="Updating" />}
+          </div>
           <Link href="/ask" className="btn-ghost flex items-center gap-1.5">
             <MessageSquare className="w-3.5 h-3.5" /><span>Ask</span>
           </Link>
-          <button onClick={load} className="btn-ghost flex items-center gap-1.5">
+          <button onClick={() => load(horizon)} className="btn-ghost flex items-center gap-1.5">
             <RefreshCw className="w-3.5 h-3.5" /><span>Refresh</span>
           </button>
         </div>
@@ -192,9 +252,9 @@ export default function DashboardPage() {
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 fade-up fade-up-2">
-        <StatCard label={filtered ? 'Total Portfolio (filtered)' : 'Total Portfolio (All)'}
-          value={formatCurrency(current.total_all, true)}
-          delta={`Peak: ${formatCurrency(peak.total_all, true)} (${peak.label})`} accent />
+        <StatCard label={filtered ? 'Total Outstanding (filtered)' : 'Total Outstanding (All)'}
+          value={formatCurrency(totalOutstandingAll(current), true)}
+          delta={`Peak: ${formatCurrency(totalOutstandingAll(peak), true)} (${peak.label})`} accent />
         <StatCard label="Active Loans" value={formatCurrency(current.total_loans, true)}
           subLabel={`${totalActiveLoans} loans${parentsFiltered ? ' · parent-filtered' : ''}`} />
         <StatCard label="Active Loan (Outstanding)"
@@ -350,6 +410,8 @@ export default function DashboardPage() {
         months={months}
         outstandingTile={outstanding}
         reconciliation={data.reconciliation}
+        asOfDate={data.as_of_date}
+        parentFiltered={parentsFiltered}
       />
     </div>
   )
@@ -359,27 +421,40 @@ interface ReconciliationPanelProps {
   months: MonthlyBalance[]
   outstandingTile: number
   reconciliation: ForecastResult['reconciliation']
+  asOfDate: string | null | undefined
+  // The month-over-month breakdown has no per-parent data.
+  parentFiltered: boolean
 }
 
 // Diagnostic surface for "Truth 5" — shows each expected identity between
 // the Monthly Summary Table's month-0 column and the tiles / Current
 // Breakdown, with the delta and the structural reason when they differ.
-function ReconciliationPanel({ months, outstandingTile, reconciliation }: ReconciliationPanelProps) {
+const RECONCILIATION_OPEN_KEY = 'sncc.dashboard.reconciliationOpen'
+
+function ReconciliationPanel({ months, outstandingTile, reconciliation, asOfDate, parentFiltered }: ReconciliationPanelProps) {
+  // Collapsed by default; the choice is remembered per browser. Read after
+  // mount (the page is prerendered) and storage failures keep the default.
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    try { if (window.localStorage.getItem(RECONCILIATION_OPEN_KEY) === '1') setOpen(true) } catch { /* default */ }
+  }, [])
+  const toggleOpen = () => {
+    const next = !open
+    setOpen(next)
+    try { window.localStorage.setItem(RECONCILIATION_OPEN_KEY, next ? '1' : '0') } catch { /* ignore */ }
+  }
+
   if (months.length === 0) return null
   const m0 = months[0]
-  const fcstAnd0 = m0.forecasted_and + m0.a_and_d_planned
-  const loansSum =
-    m0.active_sfr + m0.active_mfr + m0.active_and +
-    m0.active_raw_land + m0.active_finished_lots +
-    m0.forecasted_sfr + m0.forecasted_mfr + fcstAnd0
-  const allSum = loansSum + m0.hhh + m0.land_bucket
+  const fcstAnd0 = forecastedAnd(m0)
+  const loansSum = totalOutstandingLoans(m0)
+  const allSum = totalOutstandingAll(m0)
 
-  // Active Loan (Outstanding) tile vs Σ active_<seg> at month 0. After the
-  // "matured loans stay on the books" change, the only residual delta is
-  // the FL basis (active uses max(disbursed, current_loan_amount); tile
-  // uses disbursed). The forecasted SFR/MFR/A&D cohort balance is in
-  // loansSum but not in the tile, hence the subtractions below.
-  const activeOnly = loansSum - m0.forecasted_sfr - m0.forecasted_mfr - fcstAnd0
+  // Active Loan (Outstanding) tile vs Σ active_<seg> at month 0. The only
+  // residual delta is the FL basis (active uses max(disbursed,
+  // current_loan_amount); tile uses disbursed). The forecast layer is in
+  // loansSum but not in the tile.
+  const activeOnly = activeOnBooks(m0)
   const tileVsActive = outstandingTile - activeOnly
   const expectedDelta = -reconciliation.fl_basis_delta
   const unexplained = tileVsActive - expectedDelta
@@ -399,7 +474,7 @@ function ReconciliationPanel({ months, outstandingTile, reconciliation }: Reconc
       rhs: outstandingTile,
       note:
         `Expected gap ${fmt(loansSum - outstandingTile)} = forecast layer `
-        + `${fmt(m0.forecasted_sfr + m0.forecasted_mfr + fcstAnd0)} `
+        + `${fmt(forecastLayer(m0))} `
         + `(Forecasted SFR ${fmt(m0.forecasted_sfr)} + MFR ${fmt(m0.forecasted_mfr)} + A&D ${fmt(fcstAnd0)})`
         + ` + FL basis Δ ${fmt(reconciliation.fl_basis_delta)}`
         + (Math.abs(unexplained) < 1
@@ -433,15 +508,38 @@ function ReconciliationPanel({ months, outstandingTile, reconciliation }: Reconc
 
   const fraction = reconciliation.month_zero_fraction
   const fracPct = (fraction * 100).toFixed(1)
+  const anchor = reconciliation.proration_anchor
+  // Proration treats everything up to today as funded and on the books. That
+  // only holds if the loan report is current; YYYY-MM-DD compares by string.
+  const reportLags = !!asOfDate && !!anchor && asOfDate.slice(0, 10) < anchor.slice(0, 10)
+  // Everything the panel would flag, so the collapsed header still says
+  // whether the numbers tie — a problem must not hide behind a closed panel.
+  const issues =
+    rows.filter(r => !r.ok).length +
+    (reportLags ? 1 : 0) +
+    (!parentFiltered && Math.abs(portfolioBreakdown(m0).other) >= 1 ? 1 : 0) +
+    (!parentFiltered && months.length > 1 && Math.abs(monthBridge(months[0], months[1]).other) >= 1 ? 1 : 0)
 
   return (
     <div className="card fade-up fade-up-5">
-      <div className="card-header">
-        <span className="card-title">Reconciliation · month 0</span>
-        <span className="text-[10px] text-fg-dim">
-          import covers {fracPct}% of {m0.label} ahead
+      <button
+        type="button"
+        onClick={toggleOpen}
+        aria-expanded={open}
+        className="w-full card-header flex items-center justify-between hover:bg-border/30 transition-colors"
+      >
+        <span className="flex items-center gap-2">
+          {open ? <ChevronDown className="w-3.5 h-3.5 text-fg-dim" /> : <ChevronRight className="w-3.5 h-3.5 text-fg-dim" />}
+          <span className="card-title">Reconciliation · month 0</span>
+          {issues === 0
+            ? <span className="text-[10px] text-success-bright">✓ all reconcile</span>
+            : <span className="text-[10px] text-danger font-medium">✗ {issues} to check</span>}
         </span>
-      </div>
+        <span className="text-[10px] text-fg-dim">
+          {fracPct}% of {m0.label} still ahead
+        </span>
+      </button>
+      {open && (
       <div className="p-4 space-y-2 text-[11px]">
         {rows.map(r => (
           <div key={r.name} className="grid grid-cols-12 gap-2 items-baseline">
@@ -458,11 +556,24 @@ function ReconciliationPanel({ months, outstandingTile, reconciliation }: Reconc
           </div>
         ))}
         <div className="pt-2 mt-2 border-t border-border text-[10px] text-fg-dim italic">
-          <strong>Forecasted SFR / MFR proration:</strong> {fracPct}% of the current month is ahead of the import date,
-          so month-0 SF/MF scheduled cohorts contribute (1st-month draw × {fracPct}%) instead of the full first-month draw.
-          Subsequent months use the full draw curve. (Truth 4)
+          <strong>This month&rsquo;s anticipated originations:</strong> as of {formatAsOf(anchor)}, {fracPct}% of
+          {' '}{m0.label} is still ahead, so the forecast carries {fracPct}% of every SFR, MFR and A&amp;D
+          cohort and A&amp;D tab loan starting this month — in this month and every month after. The rest has
+          funded and is in the loan report, so carrying it again would count it twice. Loans starting before
+          this month are carried at 0% for the same reason.
         </div>
+        {reportLags && (
+          <div className="pt-2 text-[10px] text-danger">
+            <strong>The loan report is as of {formatAsOf(asOfDate)}</strong>, earlier than today
+            ({formatAsOf(anchor)}). Anything that funded in between counts as received here, but isn&rsquo;t
+            in the report yet — so it&rsquo;s in neither the actuals nor the forecast. Import a current report
+            to bring it in.
+          </div>
+        )}
+        <PortfolioBreakdown m={m0} parentFiltered={parentFiltered} />
+        {months.length > 1 && <MonthBridge prev={months[0]} curr={months[1]} parentFiltered={parentFiltered} />}
       </div>
+      )}
     </div>
   )
 }
@@ -476,6 +587,108 @@ interface SummaryRow {
   emphasis?: 'total' | 'accent' | 'forecast'
 }
 
+// What Total Portfolio (All) is made of, against Total Outstanding (All). It
+// is no longer a tile, but is still the engine's total_all. It values existing loans at their full loan amount and includes Land
+// Bucket lot-sale verticals; Outstanding values them at their drawn balance
+// and leaves those out. The parts sum to it exactly.
+function PortfolioBreakdown({ m, parentFiltered }: { m: MonthlyBalance; parentFiltered: boolean }) {
+  const fmt = (n: number) => `${n < 0 ? '−' : n > 0 ? '+' : ''}${formatCurrency(Math.abs(n), true)}`
+  if (parentFiltered) {
+    return (
+      <div className="pt-3 mt-3 border-t border-border text-[10px] text-fg-dim italic">
+        The Total Portfolio breakdown covers the whole book only — set Parent to All to see it.
+      </div>
+    )
+  }
+  const b = portfolioBreakdown(m)
+  const lines: { label: string; value: number; note?: string; base?: boolean }[] = [
+    { label: 'Total Outstanding (All)', value: b.outstandingAll, base: true,
+      note: 'Drawn balances: loans, forecast, HHH/JV, Land Bucket' },
+    { label: 'Undrawn commitment on existing loans', value: b.undrawn,
+      note: 'Total Portfolio counts each loan at its full loan amount, not what is drawn' },
+    { label: 'Loans past maturity', value: b.pastMaturity,
+      note: 'Total Portfolio drops them this month; the Active rows still carry them' },
+    { label: 'Land Bucket lot-sale loans', value: b.extraForecast,
+      note: 'Vertical loans spawned by lot sales — in Total Portfolio, not in Outstanding' },
+  ]
+  if (Math.abs(b.other) >= 1) lines.push({ label: 'Other (unexplained)', value: b.other })
+  return (
+    <div className="pt-3 mt-3 border-t border-border">
+      <div className="text-fg font-medium mb-1.5">
+        Where Total Portfolio (All) comes from, {m.label}:{' '}
+        <span className="font-mono">{formatCurrency(b.total, true)}</span>
+      </div>
+      <div className="space-y-0.5">
+        {lines.map(l => (
+          <div key={l.label} className="grid grid-cols-12 gap-2 items-baseline">
+            <div className={`col-span-5 ${l.base ? 'text-fg font-medium' : 'text-fg'}`}>{l.label}</div>
+            <div className="col-span-2 text-right font-mono text-fg">
+              {l.base ? formatCurrency(l.value, true) : Math.abs(l.value) < 1 ? '—' : fmt(l.value)}
+            </div>
+            <div className="col-span-5 text-[10px] text-fg-dim italic">{l.note ?? ''}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Why Total Outstanding (Loans) moves from the first forecast month to the
+// second, by cause. That step is the one with a structural cliff: loans
+// already past maturity stay on the books in month 0 (so the rows tie the
+// tile) and all drop out in month 1. The parts sum to the change exactly; any
+// remainder is shown as "Other" rather than folded in.
+function MonthBridge({ prev, curr, parentFiltered }: {
+  prev: MonthlyBalance
+  curr: MonthlyBalance
+  parentFiltered: boolean
+}) {
+  // Sign first, as accountants write it: −$25.7M, not $-25.7M.
+  const fmt = (n: number) => `${n < 0 ? '−' : n > 0 ? '+' : ''}${formatCurrency(Math.abs(n), true)}`
+  if (parentFiltered) {
+    return (
+      <div className="pt-3 mt-3 border-t border-border text-[10px] text-fg-dim italic">
+        The {prev.label} → {curr.label} breakdown covers the whole book only — set Parent to All to see it.
+      </div>
+    )
+  }
+  const b = monthBridge(prev, curr)
+  const lines: { label: string; value: number; note?: string }[] = [
+    { label: `Loans already past maturity before ${prev.label}`, value: b.pastMaturity,
+      note: `On the books in ${prev.label}, assumed paid off in ${curr.label} — all at once` },
+    { label: `Loans maturing in ${prev.label}`, value: b.maturing },
+    { label: 'Existing loans drawing up', value: b.draws, note: 'Along each program’s draw curve, toward its maximum' },
+    { label: 'Finished Lots paydown', value: b.paydown, note: 'Lot releases on existing finished-lots loans' },
+    { label: 'Forecasted SFR', value: b.forecastedSfr, note: 'New cohorts and draws, less cohorts reaching term' },
+    { label: 'Forecasted MFR', value: b.forecastedMfr },
+    { label: 'Forecasted A&D', value: b.forecastedAnd, note: 'A&D cohorts and A&D tab loans: draws less releases' },
+  ]
+  if (Math.abs(b.other) >= 1) lines.push({ label: 'Other (unexplained)', value: b.other })
+
+  return (
+    <div className="pt-3 mt-3 border-t border-border">
+      <div className="text-fg font-medium mb-1.5">
+        Why Total Outstanding (Loans) changes {prev.label} → {curr.label}:{' '}
+        <span className="font-mono">{fmt(b.total)}</span>
+        <span className="text-fg-dim font-normal">
+          {' '}({formatCurrency(totalOutstandingLoans(prev), true)} → {formatCurrency(totalOutstandingLoans(curr), true)})
+        </span>
+      </div>
+      <div className="space-y-0.5">
+        {lines.map(l => (
+          <div key={l.label} className="grid grid-cols-12 gap-2 items-baseline">
+            <div className="col-span-5 text-fg">{l.label}</div>
+            <div className={`col-span-2 text-right font-mono ${l.value < 0 ? 'text-danger' : l.value > 0 ? 'text-success-bright' : 'text-fg-dim'}`}>
+              {Math.abs(l.value) < 1 ? '—' : fmt(l.value)}
+            </div>
+            <div className="col-span-5 text-[10px] text-fg-dim italic">{l.note ?? ''}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function SummaryTable({ months }: { months: MonthlyBalance[] }) {
   // Per-segment rows: active = imported loan drawn balance only (no cohorts).
   // Forecasted rows: scheduled new-origination cohort drawn balance.
@@ -483,12 +696,6 @@ function SummaryTable({ months }: { months: MonthlyBalance[] }) {
   // three Forecasted rows). LB-driven verticals and HHH/JV are deliberately
   // excluded — LB is its own row, HHH/JV is sourced from the manual tab.
   // Forecasted A&D = scheduled A&D cohorts + planned A&D loans (/a-and-d tab).
-  const fcstAnd = (m: MonthlyBalance) => m.forecasted_and + m.a_and_d_planned
-  const outLoans = (m: MonthlyBalance) =>
-    m.active_sfr + m.active_mfr + m.active_and +
-    m.active_raw_land + m.active_finished_lots +
-    m.forecasted_sfr + m.forecasted_mfr + fcstAnd(m)
-
   const rows: SummaryRow[] = [
     { label: 'SFR',             values: months.map(m => m.active_sfr),             kind: 'currency' },
     { label: 'MFR',             values: months.map(m => m.active_mfr),             kind: 'currency' },
@@ -498,17 +705,16 @@ function SummaryTable({ months }: { months: MonthlyBalance[] }) {
     { label: 'Forecasted SFR',  values: months.map(m => m.forecasted_sfr),         kind: 'currency', emphasis: 'forecast' },
     { label: 'Forecasted MFR',  values: months.map(m => m.forecasted_mfr),         kind: 'currency', emphasis: 'forecast' },
     // Forecasted A&D = scheduled A&D cohorts (drawn) + planned A&D loans'
-    // contribution from /a-and-d this month. No Truth-4 month-0 proration
-    // (that rule is SFR/MFR only).
-    { label: 'Forecasted A&D',  values: months.map(fcstAnd),                       kind: 'currency', emphasis: 'forecast' },
+    // contribution from /a-and-d this month. Both are prorated by today like
+    // SFR and MFR; see lotOriginationBalance in calculator.ts.
+    { label: 'Forecasted A&D',  values: months.map(forecastedAnd),                       kind: 'currency', emphasis: 'forecast' },
     // HHH/JV is an equity investment, not a loan. Sourced from the manual
     // /hhh-jv tab. Excluded from Total Outstanding (Loans); included in
-    // Total Outstanding (All) and Total (All).
+    // Total Outstanding (All).
     { label: 'HHH/JV',          values: months.map(m => m.hhh),                    kind: 'currency' },
     { label: 'Land Bucket',     values: months.map(m => m.land_bucket),            kind: 'currency' },
-    { label: 'Total Outstanding (Loans)', values: months.map(outLoans),                                        kind: 'currency', emphasis: 'total' },
-    { label: 'Total Outstanding (All)',   values: months.map(m => outLoans(m) + m.hhh + m.land_bucket),        kind: 'currency', emphasis: 'total' },
-    { label: 'Total (All)',     values: months.map(m => m.total_all),              kind: 'currency', emphasis: 'total' },
+    { label: 'Total Outstanding (Loans)', values: months.map(totalOutstandingLoans),                                        kind: 'currency', emphasis: 'total' },
+    { label: 'Total Outstanding (All)',   values: months.map(totalOutstandingAll),        kind: 'currency', emphasis: 'total' },
     { label: 'Variance',      values: months.map(m => m.variance),                kind: 'variance' },
     { label: 'Income',        values: months.map(m => m.total_income),            kind: 'currency', emphasis: 'accent' },
     { label: 'Ann. Yield',    values: months.map(m => m.annualized_yield_pct),    kind: 'pct' },

@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
+import {
+  MIGRATION_022_MESSAGE, cleanIncreaseSchedule, isMissingIncreaseColumn,
+} from '@/lib/land-bucket-save'
 
-// Next 14 statically caches GET route handlers by default. Force-dynamic so
-// DB writes are reflected immediately on Vercel without a redeploy.
+// Kept explicit: Next 15 no longer caches GET route handlers by default, but
+// stating it means a future default change can't silently start serving a
+// build-time snapshot instead of current DB state.
 export const dynamic = 'force-dynamic'
 
 // Supabase / PostgREST errors are plain objects; String(e) collapses them
@@ -57,11 +61,18 @@ export async function POST(req: NextRequest) {
       notes:                    body.notes || null,
     }
 
-    const { data, error } = await sb
-      .from('land_bucket_projects')
-      .insert(payload)
-      .select()
-      .single()
+    // Pre-migration fallback: see lib/land-bucket-save.
+    const increases = cleanIncreaseSchedule(body.balance_increase_schedule)
+    const run = (row: Record<string, unknown>) =>
+      sb.from('land_bucket_projects').insert(row).select().single()
+
+    let { data, error } = await run({ ...payload, balance_increase_schedule: increases })
+    if (error && isMissingIncreaseColumn(error)) {
+      if (Object.keys(increases).length > 0) {
+        return NextResponse.json({ error: MIGRATION_022_MESSAGE }, { status: 409 })
+      }
+      ;({ data, error } = await run(payload))
+    }
 
     if (error) throw error
     return NextResponse.json(data)

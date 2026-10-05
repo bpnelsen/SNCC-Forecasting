@@ -6,12 +6,17 @@ import { StatCard } from '@/components/ui/StatCard'
 import { TotalBalanceChart, PortfolioStackedChart, IncomeChart, VarianceChart } from '@/components/charts/PortfolioCharts'
 import { ForecastResult, MonthlyBalance } from '@/lib/types'
 import { formatCurrency, formatPct, formatVariance } from '@/lib/utils'
-import { RefreshCw, AlertCircle, Filter, Building2, Check, ChevronDown } from 'lucide-react'
-
-// Key the engine uses for loans whose borrower doesn't match any parent
-// company (no explicit override and no pattern hit). Kept in sync with
-// UNASSIGNED_PARENT_KEY in src/lib/calculator.ts.
-const UNASSIGNED_PARENT_KEY = '__none__'
+import { RefreshCw, AlertCircle, Filter, MessageSquare, ChevronDown, ChevronRight } from 'lucide-react'
+import Link from 'next/link'
+import { ParentCompanyDropdown } from '@/components/ui/ParentCompanyDropdown'
+import { UNASSIGNED_PARENT_KEY } from '@/lib/calculator'
+import { HORIZON_OPTIONS, DEFAULT_HORIZON, parseHorizon, type Horizon } from '@/lib/horizon'
+import {
+  type FilterKey, type FilterChip, CHIPS, ALL_KEYS, applyFilter,
+} from '@/lib/dashboard-filter'
+import {
+  activeOnBooks, forecastedAnd, forecastLayer, totalOutstandingLoans, totalOutstandingAll, monthBridge, portfolioBreakdown,
+} from '@/lib/summary'
 
 // Render the active version's as_of_date (YYYY-MM-DD from the engine) as
 // "May 14, 2026". Parsed manually so timezone shifts can't bump it by a day.
@@ -26,132 +31,8 @@ function formatAsOf(iso: string | null | undefined): string {
   return `${months[mi]} ${Number(d)}, ${y}`
 }
 
-// The set of toggleable product/category buckets shown in the dashboard.
-// Land Bucket isn't a "product type" per se but it sits next to the loan
-// segments in every chart, so it lives in the same filter strip.
-type FilterKey = 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh' | 'land_bucket'
 
-interface FilterChip {
-  key: FilterKey
-  label: string
-  color: string
-}
-
-const CHIPS: FilterChip[] = [
-  { key: 'sfr',           label: 'SFR',           color: '#58A6FF' },
-  { key: 'mfr',           label: 'MFR',           color: '#D4A853' },
-  { key: 'and',           label: 'A&D',           color: '#3FB950' },
-  { key: 'raw_land',      label: 'Raw Land',      color: '#8B949E' },
-  { key: 'finished_lots', label: 'Finished Lots', color: '#A371F7' },
-  { key: 'hhh',           label: 'HHH/JV',        color: '#F85149' },
-  { key: 'land_bucket',   label: 'Land Bucket',   color: '#79C0FF' },
-]
-
-const ALL_KEYS = new Set<FilterKey>(CHIPS.map(c => c.key))
-
-// Slice a single segment by the active chip + selected parents. When the
-// parent filter is on, both the existing (imported by borrower→parent) and
-// the builder-attributed (forecasted cohorts + HHH/JV + A&D planned)
-// portions come from m.by_parent so every contribution honors the same
-// selection. The non-filtered branch reads m.<seg> / m.outstanding_<seg>
-// directly — those already fold in HHH/JV and A&D planned at the engine
-// level, so leaving them as-is keeps unfiltered numbers identical.
-type SegKey = 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots' | 'hhh'
-function sliceSegment(
-  m: MonthlyBalance,
-  seg: SegKey,
-  selectedParents: Set<string> | null,
-): { existing: number; forecasted: number; outstanding: number } {
-  if (selectedParents === null) {
-    const fcst = m[`forecasted_${seg}` as const]
-    return {
-      existing:    m[seg] - fcst,
-      forecasted:  fcst,
-      outstanding: m[`outstanding_${seg}` as const],
-    }
-  }
-  let existing = 0, forecasted = 0, outstanding = 0
-  for (const pid of selectedParents) {
-    const slot = m.by_parent[pid]
-    if (!slot) continue
-    existing    += slot[seg]
-    forecasted  += slot[`forecasted_${seg}` as const]
-    outstanding += slot[`outstanding_${seg}` as const]
-    // hhh segment also carries HHH/JV project balances; and segment carries
-    // forward-planned A&D loan balances. The engine adds these into m.<seg>
-    // and m.outstanding_<seg> globally — the per-parent slice has to do
-    // the same so totals are consistent across filter states.
-    if (seg === 'hhh') forecasted += slot.hhh_jv_balance
-    if (seg === 'and') forecasted += slot.a_and_d_planned
-  }
-  return { existing, forecasted, outstanding }
-}
-
-// Land Bucket honors the same parent selection now that builders carry a
-// parent_company_id (migration 013).
-function sliceLandBucket(m: MonthlyBalance, selectedParents: Set<string> | null): number {
-  if (selectedParents === null) return m.land_bucket
-  let total = 0
-  for (const pid of selectedParents) total += m.by_parent[pid]?.land_bucket ?? 0
-  return total
-}
-
-// Zero out segments not in `active`, then recompute total_loans, total_all,
-// and variance month-over-month. When `selectedParents` is non-null both
-// existing AND builder-attributed portions of each segment come from the
-// per-parent aggregates so Land Bucket + forecasted + HHH/JV + A&D planned
-// all honor the parent filter.
-function applyFilter(
-  months: MonthlyBalance[],
-  active: Set<FilterKey>,
-  selectedParents: Set<string> | null,
-): MonthlyBalance[] {
-  let prev = 0
-  return months.map((m, i) => {
-    const slice = (seg: SegKey, chip: FilterKey) => {
-      if (!active.has(chip)) return { combined: 0, fcst: 0, outstanding: 0 }
-      const { existing, forecasted, outstanding } = sliceSegment(m, seg, selectedParents)
-      return { combined: existing + forecasted, fcst: forecasted, outstanding }
-    }
-
-    const sSfr = slice('sfr',           'sfr')
-    const sMfr = slice('mfr',           'mfr')
-    const sAnd = slice('and',           'and')
-    const sRaw = slice('raw_land',      'raw_land')
-    const sFin = slice('finished_lots', 'finished_lots')
-    const sHhh = slice('hhh',           'hhh')
-    const lb   = active.has('land_bucket') ? sliceLandBucket(m, selectedParents) : 0
-
-    const filtered: MonthlyBalance = {
-      ...m,
-      sfr:           sSfr.combined,
-      mfr:           sMfr.combined,
-      and:           sAnd.combined,
-      raw_land:      sRaw.combined,
-      finished_lots: sFin.combined,
-      hhh:           sHhh.combined,
-      land_bucket:   lb,
-      forecasted_sfr: sSfr.fcst,
-      forecasted_mfr: sMfr.fcst,
-      outstanding_sfr:           sSfr.outstanding,
-      outstanding_mfr:           sMfr.outstanding,
-      outstanding_and:           sAnd.outstanding,
-      outstanding_raw_land:      sRaw.outstanding,
-      outstanding_finished_lots: sFin.outstanding,
-      outstanding_hhh:           sHhh.outstanding,
-      total_loans: 0,
-      total_all:   0,
-      variance:    0,
-    }
-    filtered.total_loans =
-      filtered.sfr + filtered.mfr + filtered.and +
-      filtered.raw_land + filtered.finished_lots + filtered.hhh
-    filtered.total_all = filtered.total_loans + filtered.land_bucket
-    filtered.variance = i === 0 ? 0 : filtered.total_all - prev
-    prev = filtered.total_all
-    return filtered
-  })
-}
+const HORIZON_STORAGE_KEY = 'sncc.dashboard.horizon'
 
 export default function DashboardPage() {
   const [data, setData]       = useState<ForecastResult | null>(null)
@@ -161,39 +42,82 @@ export default function DashboardPage() {
   // null = no parent filter (show all); a non-null Set selects specific
   // parent_company ids (plus UNASSIGNED_PARENT_KEY for the catch-all).
   const [selectedParents, setSelectedParents] = useState<Set<string> | null>(null)
+  // Current Breakdown $/# toggle. $ = dollar amounts (the default,
+  // matches every prior version); # = count of imported loans per
+  // segment, respecting the parent + chip filters.
+  const [breakdownMode, setBreakdownMode] = useState<'dollar' | 'count'>('dollar')
 
-  const load = async () => {
+  // Projection horizon: the forecast is recomputed for exactly this many
+  // months (?horizon=), so the Peak, the charts and the Monthly Summary cover
+  // only the chosen span. Remembered per browser; storage can be unavailable
+  // (private windows), in which case the default simply applies.
+  const [horizon, setHorizon] = useState<Horizon>(DEFAULT_HORIZON)
+  const [horizonReady, setHorizonReady] = useState(false)
+  // Each load gets an id; only the latest may write state, so quick clicks
+  // through 6 → 24 can't leave an older, slower response on screen.
+  const requestId = useRef(0)
+
+  const load = async (h: Horizon = horizon) => {
+    const id = ++requestId.current
     setLoading(true); setError(null)
     try {
-      const res = await fetch('/api/calculate', { cache: 'no-store' })
+      const res = await fetch(`/api/calculate?horizon=${h}`, { cache: 'no-store' })
       if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Failed') }
-      setData(await res.json())
+      const json = await res.json()
+      if (id === requestId.current) setData(json)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load')
-    } finally { setLoading(false) }
+      if (id === requestId.current) setError(e instanceof Error ? e.message : 'Failed to load')
+    } finally {
+      if (id === requestId.current) setLoading(false)
+    }
   }
 
-  useEffect(() => { load() }, [])
+  // Read the remembered horizon after mount (the page is prerendered, so
+  // reading storage during render would mismatch), then load with it.
+  useEffect(() => {
+    try {
+      const stored = parseHorizon(window.localStorage.getItem(HORIZON_STORAGE_KEY))
+      if (stored) setHorizon(stored)
+    } catch { /* storage unavailable — keep the default */ }
+    setHorizonReady(true)
+  }, [])
+
+  useEffect(() => {
+    if (horizonReady) load(horizon)
+    // load is recreated each render; horizon is what should trigger a reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [horizonReady, horizon])
+
+  const chooseHorizon = (h: Horizon) => {
+    if (h === horizon) return
+    setHorizon(h)
+    try { window.localStorage.setItem(HORIZON_STORAGE_KEY, String(h)) } catch { /* ignore */ }
+  }
 
   const months = useMemo(
     () => data ? applyFilter(data.months, active, selectedParents) : [],
     [data, active, selectedParents],
   )
 
-  if (loading) return <LoadingState />
-  if (error)   return <ErrorState message={error} onRetry={load} />
+  if (loading && !data) return <LoadingState />
+  if (error)   return <ErrorState message={error} onRetry={() => load(horizon)} />
   if (!data)   return null
 
   const current = months[0]
-  const peak    = months.reduce((a, b) => b.total_all > a.total_all ? b : a, months[0])
+  // The headline tile is Total Outstanding (All), the same figure as that row
+  // of the Monthly Summary, so its Peak is taken on the same basis.
+  const peak    = months.reduce((a, b) => totalOutstandingAll(b) > totalOutstandingAll(a) ? b : a, months[0])
   const chipsFiltered  = active.size < CHIPS.length
   const parentsFiltered = selectedParents !== null
   const filtered = chipsFiltered || parentsFiltered
 
-  // Outstanding (disbursed) respects both the product-type chips and the
-  // parent-company multi-select.
-  const SEGMENT_KEYS = ['sfr', 'mfr', 'and', 'raw_land', 'finished_lots', 'hhh'] as const
-  const outstanding = SEGMENT_KEYS.reduce((s, k) => {
+  // Active Loan (Outstanding) tile: disbursed balance across actual loans.
+  // Land Bucket and HHH/JV aren't loans (LB = inventory, HHH/JV = joint-
+  // venture project balances) so they're excluded categorically. Product-
+  // type chips DO gate this tile — toggling SFR off drops SFR's disbursed
+  // balance — and the parent multi-select still applies on top.
+  const LOAN_SEGMENT_KEYS = ['sfr', 'mfr', 'and', 'raw_land', 'finished_lots'] as const
+  const outstanding = LOAN_SEGMENT_KEYS.reduce((s, k) => {
     if (!active.has(k)) return s
     if (selectedParents === null) return s + data.active_loans_outstanding[k]
     const monthOne = data.months[0]
@@ -230,10 +154,64 @@ export default function DashboardPage() {
             {data.version_label} · {data.total_active_loans} active loans · As of {formatAsOf(data.as_of_date)}
           </p>
         </div>
-        <button onClick={load} className="btn-ghost flex items-center gap-1.5">
-          <RefreshCw className="w-3.5 h-3.5" /><span>Refresh</span>
-        </button>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <div className="flex items-center gap-1.5" role="group" aria-label="Projection horizon">
+            <span className="text-[10px] text-fg-dim">Project out</span>
+            <div className="inline-flex rounded-lg border border-border-strong overflow-hidden">
+              {HORIZON_OPTIONS.map(h => (
+                <button
+                  key={h}
+                  type="button"
+                  onClick={() => chooseHorizon(h)}
+                  aria-pressed={h === horizon}
+                  className={`px-2.5 py-1 text-[11px] font-medium transition-colors border-l border-border-strong first:border-l-0
+                    ${h === horizon ? 'bg-accent/15 text-accent' : 'text-fg-dim hover:text-fg hover:bg-border'}`}
+                >
+                  {h} mo
+                </button>
+              ))}
+            </div>
+            {loading && <RefreshCw className="w-3 h-3 text-fg-dim animate-spin" aria-label="Updating" />}
+          </div>
+          <Link href="/ask" className="btn-ghost flex items-center gap-1.5">
+            <MessageSquare className="w-3.5 h-3.5" /><span>Ask</span>
+          </Link>
+          <button onClick={() => load(horizon)} className="btn-ghost flex items-center gap-1.5">
+            <RefreshCw className="w-3.5 h-3.5" /><span>Refresh</span>
+          </button>
+        </div>
       </div>
+
+      {/* Data-quality banner. Both conditions distort the numbers on this page
+          without producing any error, so they are surfaced here rather than
+          left to be discovered as an unexplained balance. */}
+      {(data.unclassified_loan_count > 0 || data.no_maturity_loan_count > 0) && (
+        <div className="card fade-up fade-up-1 p-3 border-danger-strong/40 bg-danger-strong/5 space-y-1.5">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-danger">
+            <AlertCircle className="w-3.5 h-3.5" />
+            Check this import
+          </div>
+          {data.unclassified_loan_count > 0 && (
+            <div className="text-[11px] text-fg-dim">
+              <strong className="text-fg">{data.unclassified_loan_count}</strong> of{' '}
+              {data.total_active_loans} loans could not be classified from their Loan
+              Program. Imported loans typed UNKNOWN contribute to{' '}
+              <strong className="text-fg">no segment</strong>, so their balances are
+              missing from the totals below. Set the type on the{' '}
+              <Link href="/loans" className="text-accent underline">Loans</Link> tab, or
+              update the rules in <code>classifyLoan</code>.
+            </div>
+          )}
+          {data.no_maturity_loan_count > 0 && (
+            <div className="text-[11px] text-fg-dim">
+              <strong className="text-fg">{data.no_maturity_loan_count}</strong> of{' '}
+              {data.total_active_loans} loans have no maturity date. Those balances are
+              held flat for the whole horizon instead of paying off, so forecast
+              balances trend high.
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Filter strip */}
       <div className="card fade-up fade-up-1 p-3 flex items-center gap-2 flex-wrap">
@@ -274,9 +252,9 @@ export default function DashboardPage() {
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 fade-up fade-up-2">
-        <StatCard label={filtered ? 'Total Portfolio (filtered)' : 'Total Portfolio (All)'}
-          value={formatCurrency(current.total_all, true)}
-          delta={`Peak: ${formatCurrency(peak.total_all, true)} (${peak.label})`} accent />
+        <StatCard label={filtered ? 'Total Outstanding (filtered)' : 'Total Outstanding (All)'}
+          value={formatCurrency(totalOutstandingAll(current), true)}
+          delta={`Peak: ${formatCurrency(totalOutstandingAll(peak), true)} (${peak.label})`} accent />
         <StatCard label="Active Loans" value={formatCurrency(current.total_loans, true)}
           subLabel={`${totalActiveLoans} loans${parentsFiltered ? ' · parent-filtered' : ''}`} />
         <StatCard label="Active Loan (Outstanding)"
@@ -298,44 +276,107 @@ export default function DashboardPage() {
               {months[0]?.label} → {months[months.length - 1]?.label}
             </span>
           </div>
-          <div className="p-4"><TotalBalanceChart data={months} /></div>
+          {/* $125M Y-axis floor on the unfiltered view gives more depth to
+              month-over-month movement; any active filter (product chips or
+              parent) drops the floor back to 0 so smaller filtered totals
+              still fit on the chart. */}
+          <div className="p-4">
+            <TotalBalanceChart data={months} yAxisFloor={filtered ? 0 : 125_000_000} />
+          </div>
         </div>
 
         <div className="card">
-          <div className="card-header"><span className="card-title">Current Breakdown</span></div>
+          <div className="card-header flex items-center justify-between">
+            <span className="card-title">Current Breakdown</span>
+            {/* $/# toggle. $ shows dollar balances (default); # shows
+                count of imported loans per segment, summed across
+                whichever parents are selected. Forecasted / HHH/JV /
+                Land Bucket rows hide in # mode — they're not loans. */}
+            <div className="inline-flex items-center gap-0.5 border border-border rounded-md p-0.5">
+              <button
+                onClick={() => setBreakdownMode('dollar')}
+                className={`px-2 py-0.5 text-[10px] font-mono rounded
+                            ${breakdownMode === 'dollar'
+                              ? 'bg-accent text-accent-on'
+                              : 'text-fg-dim hover:text-fg'}`}
+                title="Dollar balances"
+              >$</button>
+              <button
+                onClick={() => setBreakdownMode('count')}
+                className={`px-2 py-0.5 text-[10px] font-mono rounded
+                            ${breakdownMode === 'count'
+                              ? 'bg-accent text-accent-on'
+                              : 'text-fg-dim hover:text-fg'}`}
+                title="Loan count"
+              >#</button>
+            </div>
+          </div>
           <div className="p-4 space-y-2">
-            {[
-              // Base SFR / MFR are existing loans only; the forecasted
-              // portion is broken out into its own banded rows below so the
-              // slices don't overlap (Total still includes both).
-              { label: 'SFR',            value: current.sfr - current.forecasted_sfr, color: '#58A6FF' },
-              { label: 'MFR',            value: current.mfr - current.forecasted_mfr, color: '#D4A853' },
-              { label: 'A&D',            value: current.and,            color: '#3FB950' },
-              { label: 'Raw Land',       value: current.raw_land,       color: '#8B949E' },
-              { label: 'Finished Lots',  value: current.finished_lots,  color: '#A371F7' },
-              { label: 'HHH/JV',         value: current.hhh,            color: '#F85149' },
-              { label: 'Land Bucket',    value: current.land_bucket,    color: '#79C0FF' },
-              { label: 'Forecasted SFR', value: current.forecasted_sfr, color: '#8B949E', forecast: true },
-              { label: 'Forecasted MFR', value: current.forecasted_mfr, color: '#8B949E', forecast: true },
-            ].filter(r => r.value > 0).map(row => {
-              const pct = current.total_all > 0 ? row.value / current.total_all : 0
-              return (
-                <div key={row.label}
-                     className={row.forecast ? 'bg-fg-dim/10 -mx-2 px-2 py-1.5 rounded-md' : ''}>
-                  <div className="flex items-center justify-between text-xs mb-1">
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-2 h-2 rounded-full" style={{ background: row.color }} />
-                      <span className="text-fg-dim">{row.label}</span>
+            {(() => {
+              // Resolve the per-segment count once. With a parent filter
+              // active, sum across the selected parents' slots.
+              const segCount = (k: 'sfr' | 'mfr' | 'and' | 'raw_land' | 'finished_lots') => {
+                if (selectedParents === null) return data.active_loan_counts?.[k] ?? 0
+                let sum = 0
+                for (const pid of selectedParents) {
+                  sum += data.active_loan_counts_by_parent?.[pid]?.[k] ?? 0
+                }
+                return sum
+              }
+
+              const dollarRows = [
+                { label: 'SFR',            value: current.active_sfr,           color: '#58A6FF' },
+                { label: 'MFR',            value: current.active_mfr,           color: '#D4A853' },
+                { label: 'A&D',            value: current.active_and,           color: '#3FB950' },
+                { label: 'Raw Land',       value: current.active_raw_land,      color: '#8B949E' },
+                { label: 'Finished Lots',  value: current.active_finished_lots, color: '#A371F7' },
+                { label: 'HHH/JV',         value: current.hhh,            color: '#F85149' },
+                { label: 'Land Bucket',    value: current.land_bucket,    color: '#79C0FF' },
+                { label: 'Forecasted SFR', value: current.forecasted_sfr, color: '#8B949E', forecast: true },
+                { label: 'Forecasted MFR', value: current.forecasted_mfr, color: '#8B949E', forecast: true },
+                { label: 'Forecasted A&D', value: current.forecasted_and + current.a_and_d_planned, color: '#8B949E', forecast: true },
+              ]
+
+              const countRows = [
+                { label: 'SFR',           value: segCount('sfr'),           color: '#58A6FF' },
+                { label: 'MFR',           value: segCount('mfr'),           color: '#D4A853' },
+                { label: 'A&D',           value: segCount('and'),           color: '#3FB950' },
+                { label: 'Raw Land',      value: segCount('raw_land'),      color: '#8B949E' },
+                { label: 'Finished Lots', value: segCount('finished_lots'), color: '#A371F7' },
+              ]
+
+              const rows = breakdownMode === 'dollar' ? dollarRows : countRows
+              const denom = breakdownMode === 'dollar'
+                ? current.total_all
+                : rows.reduce((s, r) => s + r.value, 0)
+
+              return rows
+                .filter(r => r.value > 0)
+                .map(row => {
+                  const pct = denom > 0 ? row.value / denom : 0
+                  const fcst = 'forecast' in row && row.forecast
+                  return (
+                    <div key={row.label}
+                         className={fcst ? 'bg-fg-dim/10 -mx-2 px-2 py-1.5 rounded-md' : ''}>
+                      <div className="flex items-center justify-between text-xs mb-1">
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-2 h-2 rounded-full" style={{ background: row.color }} />
+                          <span className="text-fg-dim">{row.label}</span>
+                        </div>
+                        <span className="font-mono text-fg">
+                          {breakdownMode === 'dollar'
+                            ? formatCurrency(row.value, true)
+                            : `${row.value}`}
+                        </span>
+                      </div>
+                      <div className="h-1 bg-border rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all duration-500"
+                             style={{ width: `${pct * 100}%`, background: row.color }} />
+                      </div>
                     </div>
-                    <span className="font-mono text-fg">{formatCurrency(row.value, true)}</span>
-                  </div>
-                  <div className="h-1 bg-border rounded-full overflow-hidden">
-                    <div className="h-full rounded-full transition-all duration-500"
-                         style={{ width: `${pct * 100}%`, background: row.color }} />
-                  </div>
-                </div>
-              )
-            })}
+                  )
+                })
+            })()}
           </div>
         </div>
       </div>
@@ -361,6 +402,178 @@ export default function DashboardPage() {
         <div className="card-header"><span className="card-title">Monthly Summary Table</span></div>
         <SummaryTable months={months} />
       </div>
+
+      {/* Reconciliation panel — verifies the month-0 column matches the
+          dashboard tiles + Current Breakdown and surfaces any expected
+          deltas with a one-line explanation. */}
+      <ReconciliationPanel
+        months={months}
+        outstandingTile={outstanding}
+        reconciliation={data.reconciliation}
+        asOfDate={data.as_of_date}
+        parentFiltered={parentsFiltered}
+      />
+    </div>
+  )
+}
+
+interface ReconciliationPanelProps {
+  months: MonthlyBalance[]
+  outstandingTile: number
+  reconciliation: ForecastResult['reconciliation']
+  asOfDate: string | null | undefined
+  // The month-over-month breakdown has no per-parent data.
+  parentFiltered: boolean
+}
+
+// Diagnostic surface for "Truth 5" — shows each expected identity between
+// the Monthly Summary Table's month-0 column and the tiles / Current
+// Breakdown, with the delta and the structural reason when they differ.
+const RECONCILIATION_OPEN_KEY = 'sncc.dashboard.reconciliationOpen'
+
+function ReconciliationPanel({ months, outstandingTile, reconciliation, asOfDate, parentFiltered }: ReconciliationPanelProps) {
+  // Collapsed by default; the choice is remembered per browser. Read after
+  // mount (the page is prerendered) and storage failures keep the default.
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    try { if (window.localStorage.getItem(RECONCILIATION_OPEN_KEY) === '1') setOpen(true) } catch { /* default */ }
+  }, [])
+  const toggleOpen = () => {
+    const next = !open
+    setOpen(next)
+    try { window.localStorage.setItem(RECONCILIATION_OPEN_KEY, next ? '1' : '0') } catch { /* ignore */ }
+  }
+
+  if (months.length === 0) return null
+  const m0 = months[0]
+  const fcstAnd0 = forecastedAnd(m0)
+  const loansSum = totalOutstandingLoans(m0)
+  const allSum = totalOutstandingAll(m0)
+
+  // Active Loan (Outstanding) tile vs Σ active_<seg> at month 0. The only
+  // residual delta is the FL basis (active uses max(disbursed,
+  // current_loan_amount); tile uses disbursed). The forecast layer is in
+  // loansSum but not in the tile.
+  const activeOnly = activeOnBooks(m0)
+  const tileVsActive = outstandingTile - activeOnly
+  const expectedDelta = -reconciliation.fl_basis_delta
+  const unexplained = tileVsActive - expectedDelta
+
+  type Row = { name: string; ok: boolean; lhs?: number; rhs?: number; note: string }
+  const fmt = (n: number) => formatCurrency(n, true)
+
+  const rows: Row[] = [
+    {
+      // The comparison people actually make: the row in the Monthly Summary
+      // against the tile at the top of the page. Their names are nearly
+      // identical and the quantities are not, so state the decomposition
+      // outright rather than leaving the gap to be puzzled over.
+      name: 'Total Outstanding (Loans) − Active Loan (Outstanding) tile',
+      ok: Math.abs(unexplained) < 1,
+      lhs: loansSum,
+      rhs: outstandingTile,
+      note:
+        `Expected gap ${fmt(loansSum - outstandingTile)} = forecast layer `
+        + `${fmt(forecastLayer(m0))} `
+        + `(Forecasted SFR ${fmt(m0.forecasted_sfr)} + MFR ${fmt(m0.forecasted_mfr)} + A&D ${fmt(fcstAnd0)})`
+        + ` + FL basis Δ ${fmt(reconciliation.fl_basis_delta)}`
+        + (Math.abs(unexplained) < 1
+          ? '. The tile is imported loans at disbursed only — it carries no forecast.'
+          : `. UNEXPLAINED ${fmt(unexplained)} — the gap is not fully accounted for.`),
+    },
+    {
+      name: 'Total Outstanding (Loans) ≡ Σ visible loan rows',
+      ok: true,
+      lhs: loansSum,
+      rhs: loansSum,
+      note: 'Active SFR + MFR + A&D + Raw Land + Fin Lots + Forecasted SFR + MFR + A&D',
+    },
+    {
+      name: 'Total Outstanding (All) ≡ Loans + HHH/JV + Land Bucket',
+      ok: true,
+      lhs: allSum,
+      rhs: allSum,
+      note: 'HHH/JV equity + Land Bucket inventory layered on top',
+    },
+    {
+      name: 'Active Loan (Outstanding) tile ≡ Σ active_<seg> at month 0',
+      ok: Math.abs(unexplained) < 1,
+      lhs: outstandingTile,
+      rhs: activeOnly,
+      note: Math.abs(unexplained) < 1
+        ? `Reconciles: tile − active = −FL basis Δ (${fmt(reconciliation.fl_basis_delta)}); matured loans are counted in both`
+        : `Unexplained Δ of ${fmt(unexplained)} beyond FL basis (${fmt(reconciliation.fl_basis_delta)})`,
+    },
+  ]
+
+  const fraction = reconciliation.month_zero_fraction
+  const fracPct = (fraction * 100).toFixed(1)
+  const anchor = reconciliation.proration_anchor
+  // Proration treats everything up to today as funded and on the books. That
+  // only holds if the loan report is current; YYYY-MM-DD compares by string.
+  const reportLags = !!asOfDate && !!anchor && asOfDate.slice(0, 10) < anchor.slice(0, 10)
+  // Everything the panel would flag, so the collapsed header still says
+  // whether the numbers tie — a problem must not hide behind a closed panel.
+  const issues =
+    rows.filter(r => !r.ok).length +
+    (reportLags ? 1 : 0) +
+    (!parentFiltered && Math.abs(portfolioBreakdown(m0).other) >= 1 ? 1 : 0) +
+    (!parentFiltered && months.length > 1 && Math.abs(monthBridge(months[0], months[1]).other) >= 1 ? 1 : 0)
+
+  return (
+    <div className="card fade-up fade-up-5">
+      <button
+        type="button"
+        onClick={toggleOpen}
+        aria-expanded={open}
+        className="w-full card-header flex items-center justify-between hover:bg-border/30 transition-colors"
+      >
+        <span className="flex items-center gap-2">
+          {open ? <ChevronDown className="w-3.5 h-3.5 text-fg-dim" /> : <ChevronRight className="w-3.5 h-3.5 text-fg-dim" />}
+          <span className="card-title">Reconciliation · month 0</span>
+          {issues === 0
+            ? <span className="text-[10px] text-success-bright">✓ all reconcile</span>
+            : <span className="text-[10px] text-danger font-medium">✗ {issues} to check</span>}
+        </span>
+        <span className="text-[10px] text-fg-dim">
+          {fracPct}% of {m0.label} still ahead
+        </span>
+      </button>
+      {open && (
+      <div className="p-4 space-y-2 text-[11px]">
+        {rows.map(r => (
+          <div key={r.name} className="grid grid-cols-12 gap-2 items-baseline">
+            <div className="col-span-1 text-center">
+              {r.ok ? <span className="text-success-bright">✓</span> : <span className="text-danger">✗</span>}
+            </div>
+            <div className="col-span-5 text-fg">{r.name}</div>
+            <div className="col-span-3 text-right font-mono text-fg-dim">
+              {r.lhs != null && r.rhs != null
+                ? `${fmt(r.lhs)} = ${fmt(r.rhs)}`
+                : ''}
+            </div>
+            <div className="col-span-3 text-[10px] text-fg-dim italic">{r.note}</div>
+          </div>
+        ))}
+        <div className="pt-2 mt-2 border-t border-border text-[10px] text-fg-dim italic">
+          <strong>This month&rsquo;s anticipated originations:</strong> as of {formatAsOf(anchor)}, {fracPct}% of
+          {' '}{m0.label} is still ahead, so the forecast carries {fracPct}% of every SFR, MFR and A&amp;D
+          cohort and A&amp;D tab loan starting this month — in this month and every month after. The rest has
+          funded and is in the loan report, so carrying it again would count it twice. Loans starting before
+          this month are carried at 0% for the same reason.
+        </div>
+        {reportLags && (
+          <div className="pt-2 text-[10px] text-danger">
+            <strong>The loan report is as of {formatAsOf(asOfDate)}</strong>, earlier than today
+            ({formatAsOf(anchor)}). Anything that funded in between counts as received here, but isn&rsquo;t
+            in the report yet — so it&rsquo;s in neither the actuals nor the forecast. Import a current report
+            to bring it in.
+          </div>
+        )}
+        <PortfolioBreakdown m={m0} parentFiltered={parentFiltered} />
+        {months.length > 1 && <MonthBridge prev={months[0]} curr={months[1]} parentFiltered={parentFiltered} />}
+      </div>
+      )}
     </div>
   )
 }
@@ -374,25 +587,134 @@ interface SummaryRow {
   emphasis?: 'total' | 'accent' | 'forecast'
 }
 
-function SummaryTable({ months }: { months: MonthlyBalance[] }) {
-  // Drawn/outstanding total for the loan book (existing disbursed +
-  // forecasted cohorts), excluding Land Bucket; "All" adds Land Bucket.
-  const outLoans = (m: MonthlyBalance) =>
-    m.outstanding_sfr + m.outstanding_mfr + m.outstanding_and +
-    m.outstanding_raw_land + m.outstanding_finished_lots + m.outstanding_hhh
+// What Total Portfolio (All) is made of, against Total Outstanding (All). It
+// is no longer a tile, but is still the engine's total_all. It values existing loans at their full loan amount and includes Land
+// Bucket lot-sale verticals; Outstanding values them at their drawn balance
+// and leaves those out. The parts sum to it exactly.
+function PortfolioBreakdown({ m, parentFiltered }: { m: MonthlyBalance; parentFiltered: boolean }) {
+  const fmt = (n: number) => `${n < 0 ? '−' : n > 0 ? '+' : ''}${formatCurrency(Math.abs(n), true)}`
+  if (parentFiltered) {
+    return (
+      <div className="pt-3 mt-3 border-t border-border text-[10px] text-fg-dim italic">
+        The Total Portfolio breakdown covers the whole book only — set Parent to All to see it.
+      </div>
+    )
+  }
+  const b = portfolioBreakdown(m)
+  const lines: { label: string; value: number; note?: string; base?: boolean }[] = [
+    { label: 'Total Outstanding (All)', value: b.outstandingAll, base: true,
+      note: 'Drawn balances: loans, forecast, HHH/JV, Land Bucket' },
+    { label: 'Undrawn commitment on existing loans', value: b.undrawn,
+      note: 'Total Portfolio counts each loan at its full loan amount, not what is drawn' },
+    { label: 'Loans past maturity', value: b.pastMaturity,
+      note: 'Total Portfolio drops them this month; the Active rows still carry them' },
+    { label: 'Land Bucket lot-sale loans', value: b.extraForecast,
+      note: 'Vertical loans spawned by lot sales — in Total Portfolio, not in Outstanding' },
+  ]
+  if (Math.abs(b.other) >= 1) lines.push({ label: 'Other (unexplained)', value: b.other })
+  return (
+    <div className="pt-3 mt-3 border-t border-border">
+      <div className="text-fg font-medium mb-1.5">
+        Where Total Portfolio (All) comes from, {m.label}:{' '}
+        <span className="font-mono">{formatCurrency(b.total, true)}</span>
+      </div>
+      <div className="space-y-0.5">
+        {lines.map(l => (
+          <div key={l.label} className="grid grid-cols-12 gap-2 items-baseline">
+            <div className={`col-span-5 ${l.base ? 'text-fg font-medium' : 'text-fg'}`}>{l.label}</div>
+            <div className="col-span-2 text-right font-mono text-fg">
+              {l.base ? formatCurrency(l.value, true) : Math.abs(l.value) < 1 ? '—' : fmt(l.value)}
+            </div>
+            <div className="col-span-5 text-[10px] text-fg-dim italic">{l.note ?? ''}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
+// Why Total Outstanding (Loans) moves from the first forecast month to the
+// second, by cause. That step is the one with a structural cliff: loans
+// already past maturity stay on the books in month 0 (so the rows tie the
+// tile) and all drop out in month 1. The parts sum to the change exactly; any
+// remainder is shown as "Other" rather than folded in.
+function MonthBridge({ prev, curr, parentFiltered }: {
+  prev: MonthlyBalance
+  curr: MonthlyBalance
+  parentFiltered: boolean
+}) {
+  // Sign first, as accountants write it: −$25.7M, not $-25.7M.
+  const fmt = (n: number) => `${n < 0 ? '−' : n > 0 ? '+' : ''}${formatCurrency(Math.abs(n), true)}`
+  if (parentFiltered) {
+    return (
+      <div className="pt-3 mt-3 border-t border-border text-[10px] text-fg-dim italic">
+        The {prev.label} → {curr.label} breakdown covers the whole book only — set Parent to All to see it.
+      </div>
+    )
+  }
+  const b = monthBridge(prev, curr)
+  const lines: { label: string; value: number; note?: string }[] = [
+    { label: `Loans already past maturity before ${prev.label}`, value: b.pastMaturity,
+      note: `On the books in ${prev.label}, assumed paid off in ${curr.label} — all at once` },
+    { label: `Loans maturing in ${prev.label}`, value: b.maturing },
+    { label: 'Existing loans drawing up', value: b.draws, note: 'Along each program’s draw curve, toward its maximum' },
+    { label: 'Finished Lots paydown', value: b.paydown, note: 'Lot releases on existing finished-lots loans' },
+    { label: 'Forecasted SFR', value: b.forecastedSfr, note: 'New cohorts and draws, less cohorts reaching term' },
+    { label: 'Forecasted MFR', value: b.forecastedMfr },
+    { label: 'Forecasted A&D', value: b.forecastedAnd, note: 'A&D cohorts and A&D tab loans: draws less releases' },
+  ]
+  if (Math.abs(b.other) >= 1) lines.push({ label: 'Other (unexplained)', value: b.other })
+
+  return (
+    <div className="pt-3 mt-3 border-t border-border">
+      <div className="text-fg font-medium mb-1.5">
+        Why Total Outstanding (Loans) changes {prev.label} → {curr.label}:{' '}
+        <span className="font-mono">{fmt(b.total)}</span>
+        <span className="text-fg-dim font-normal">
+          {' '}({formatCurrency(totalOutstandingLoans(prev), true)} → {formatCurrency(totalOutstandingLoans(curr), true)})
+        </span>
+      </div>
+      <div className="space-y-0.5">
+        {lines.map(l => (
+          <div key={l.label} className="grid grid-cols-12 gap-2 items-baseline">
+            <div className="col-span-5 text-fg">{l.label}</div>
+            <div className={`col-span-2 text-right font-mono ${l.value < 0 ? 'text-danger' : l.value > 0 ? 'text-success-bright' : 'text-fg-dim'}`}>
+              {Math.abs(l.value) < 1 ? '—' : fmt(l.value)}
+            </div>
+            <div className="col-span-5 text-[10px] text-fg-dim italic">{l.note ?? ''}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function SummaryTable({ months }: { months: MonthlyBalance[] }) {
+  // Per-segment rows: active = imported loan drawn balance only (no cohorts).
+  // Forecasted rows: scheduled new-origination cohort drawn balance.
+  // Total Outstanding (Loans) = sum of every loan row above (active + the
+  // three Forecasted rows). LB-driven verticals and HHH/JV are deliberately
+  // excluded — LB is its own row, HHH/JV is sourced from the manual tab.
+  // Forecasted A&D = scheduled A&D cohorts + planned A&D loans (/a-and-d tab).
   const rows: SummaryRow[] = [
-    { label: 'SFR',             values: months.map(m => m.sfr - m.forecasted_sfr), kind: 'currency' },
-    { label: 'MFR',             values: months.map(m => m.mfr - m.forecasted_mfr), kind: 'currency' },
-    { label: 'A&D',             values: months.map(m => m.and),                    kind: 'currency' },
-    { label: 'Raw Land',        values: months.map(m => m.raw_land),               kind: 'currency' },
-    { label: 'Fin. Lots',       values: months.map(m => m.finished_lots),          kind: 'currency' },
+    { label: 'SFR',             values: months.map(m => m.active_sfr),             kind: 'currency' },
+    { label: 'MFR',             values: months.map(m => m.active_mfr),             kind: 'currency' },
+    { label: 'A&D',             values: months.map(m => m.active_and),             kind: 'currency' },
+    { label: 'Raw Land',        values: months.map(m => m.active_raw_land),        kind: 'currency' },
+    { label: 'Fin. Lots',       values: months.map(m => m.active_finished_lots),   kind: 'currency' },
     { label: 'Forecasted SFR',  values: months.map(m => m.forecasted_sfr),         kind: 'currency', emphasis: 'forecast' },
     { label: 'Forecasted MFR',  values: months.map(m => m.forecasted_mfr),         kind: 'currency', emphasis: 'forecast' },
+    // Forecasted A&D = scheduled A&D cohorts (drawn) + planned A&D loans'
+    // contribution from /a-and-d this month. Both are prorated by today like
+    // SFR and MFR; see lotOriginationBalance in calculator.ts.
+    { label: 'Forecasted A&D',  values: months.map(forecastedAnd),                       kind: 'currency', emphasis: 'forecast' },
+    // HHH/JV is an equity investment, not a loan. Sourced from the manual
+    // /hhh-jv tab. Excluded from Total Outstanding (Loans); included in
+    // Total Outstanding (All).
+    { label: 'HHH/JV',          values: months.map(m => m.hhh),                    kind: 'currency' },
     { label: 'Land Bucket',     values: months.map(m => m.land_bucket),            kind: 'currency' },
-    { label: 'Total Outstanding (Loans)', values: months.map(outLoans),                       kind: 'currency', emphasis: 'total' },
-    { label: 'Total Outstanding (All)',   values: months.map(m => outLoans(m) + m.land_bucket), kind: 'currency', emphasis: 'total' },
-    { label: 'Total (All)',     values: months.map(m => m.total_all),              kind: 'currency', emphasis: 'total' },
+    { label: 'Total Outstanding (Loans)', values: months.map(totalOutstandingLoans),                                        kind: 'currency', emphasis: 'total' },
+    { label: 'Total Outstanding (All)',   values: months.map(totalOutstandingAll),        kind: 'currency', emphasis: 'total' },
     { label: 'Variance',      values: months.map(m => m.variance),                kind: 'variance' },
     { label: 'Income',        values: months.map(m => m.total_income),            kind: 'currency', emphasis: 'accent' },
     { label: 'Ann. Yield',    values: months.map(m => m.annualized_yield_pct),    kind: 'pct' },
@@ -443,151 +765,6 @@ function SummaryTable({ months }: { months: MonthlyBalance[] }) {
   )
 }
 
-// ─── Parent Company multi-select dropdown ───────────────────────────────────
-// Custom checkbox popover (native multi-select is hard to style and tab-
-// navigate). selected === null = "all"; otherwise the Set holds the parent
-// company ids that are currently active. UNASSIGNED_PARENT_KEY is a regular
-// row so the user can isolate borrowers with no parent if they want.
-
-function ParentCompanyDropdown({
-  parents, parentLoanCounts, selected, onChange,
-}: {
-  parents: { id: string; name: string }[]
-  parentLoanCounts: Record<string, number>
-  selected: Set<string> | null
-  onChange: (s: Set<string> | null) => void
-}) {
-  const [open, setOpen]       = useState(false)
-  // Position is computed from the button's getBoundingClientRect on open
-  // (and on scroll/resize while open) and the popover renders via portal
-  // into document.body, so it can never be clipped by a parent .card's
-  // overflow-hidden or buried under sibling cards' stacking contexts.
-  const [pos, setPos]         = useState<{ top: number; right: number } | null>(null)
-  const buttonRef             = useRef<HTMLButtonElement>(null)
-  const popoverRef            = useRef<HTMLDivElement>(null)
-  const [mounted, setMounted] = useState(false)
-  useEffect(() => { setMounted(true) }, [])
-
-  const reposition = () => {
-    const rect = buttonRef.current?.getBoundingClientRect()
-    if (!rect) return
-    setPos({
-      top:   Math.round(rect.bottom + 4),
-      right: Math.round(window.innerWidth - rect.right),
-    })
-  }
-
-  useEffect(() => {
-    if (!open) return
-    reposition()
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node
-      if (buttonRef.current?.contains(t)) return
-      if (popoverRef.current?.contains(t)) return
-      setOpen(false)
-    }
-    const onEsc      = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
-    const onResize   = () => reposition()
-    const onScroll   = () => reposition()
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onEsc)
-    window.addEventListener('resize', onResize)
-    window.addEventListener('scroll',  onScroll, true)  // capture = catch inner scrollers too
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onEsc)
-      window.removeEventListener('resize', onResize)
-      window.removeEventListener('scroll',  onScroll, true)
-    }
-  }, [open])
-
-  const rows = useMemo(() => {
-    const base = parents.map(p => ({ id: p.id, name: p.name, count: parentLoanCounts[p.id] ?? 0 }))
-    base.sort((a, b) => a.name.localeCompare(b.name))
-    base.push({
-      id: UNASSIGNED_PARENT_KEY,
-      name: '(Unassigned)',
-      count: parentLoanCounts[UNASSIGNED_PARENT_KEY] ?? 0,
-    })
-    return base
-  }, [parents, parentLoanCounts])
-
-  const label = selected === null
-    ? 'Parent: All'
-    : selected.size === 0
-      ? 'Parent: none'
-      : selected.size === 1
-        ? `Parent: ${rows.find(r => r.id === Array.from(selected)[0])?.name ?? '—'}`
-        : `Parent: ${selected.size} selected`
-
-  const toggle = (id: string) => {
-    const next = selected === null ? new Set<string>() : new Set(selected)
-    if (next.has(id)) next.delete(id); else next.add(id)
-    onChange(next)
-  }
-  const selectAll = () => onChange(null)
-  const selectNone = () => onChange(new Set())
-
-  const popover = open && pos && mounted ? createPortal(
-    <div ref={popoverRef}
-         style={{ position: 'fixed', top: pos.top, right: pos.right, zIndex: 1000 }}
-         className="w-64 bg-surface border border-border-strong rounded-lg shadow-xl max-h-80 overflow-y-auto">
-      <div className="px-2 py-1.5 border-b border-border flex items-center justify-between text-[10px] text-fg-dim">
-        <span>Parent companies</span>
-        <div className="flex items-center gap-1">
-          <button onClick={selectAll}  className="btn-ghost text-[10px] px-1.5 py-0.5">All</button>
-          <button onClick={selectNone} className="btn-ghost text-[10px] px-1.5 py-0.5">None</button>
-        </div>
-      </div>
-      {rows.length === 1 && rows[0].id === UNASSIGNED_PARENT_KEY ? (
-        <div className="text-[10px] text-fg-dim italic px-3 py-3 space-y-1.5">
-          <div>The forecast engine returned 0 parent companies.</div>
-          <div>
-            If you already added some on Assumptions, this almost always means
-            the deployed <code>/api/calculate</code> hasn&rsquo;t been refreshed.
-            Try: <strong>hard-refresh</strong> (⌘⇧R / Ctrl⇧R) or check{' '}
-            <a className="underline" href="/api/calculate" target="_blank" rel="noreferrer">
-              /api/calculate
-            </a>{' '}
-            for a <code>parent_companies</code> array.
-          </div>
-        </div>
-      ) : rows.map(r => {
-        const on = selected === null ? true : selected.has(r.id)
-        return (
-          <button key={r.id}
-                  onClick={() => toggle(r.id)}
-                  className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs
-                             hover:bg-border/50 text-left">
-            <span className="flex items-center gap-2">
-              <span className={`w-3.5 h-3.5 inline-flex items-center justify-center rounded border
-                                ${on ? 'bg-accent border-accent text-accent-on' : 'border-border-strong'}`}>
-                {on && <Check className="w-2.5 h-2.5" />}
-              </span>
-              <span className={r.id === UNASSIGNED_PARENT_KEY ? 'text-fg-dim italic' : 'text-fg'}>
-                {r.name}
-              </span>
-            </span>
-            <span className="text-[10px] text-fg-dim font-mono">{r.count}</span>
-          </button>
-        )
-      })}
-    </div>,
-    document.body,
-  ) : null
-
-  return (
-    <>
-      <button ref={buttonRef} onClick={() => setOpen(o => !o)}
-              className="btn-ghost text-[10px] inline-flex items-center gap-1.5">
-        <Building2 className="w-3 h-3" />
-        {label}
-        <ChevronDown className="w-3 h-3" />
-      </button>
-      {popover}
-    </>
-  )
-}
 
 function LoadingState() {
   return (

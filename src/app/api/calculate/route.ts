@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
+import { format } from 'date-fns'
+import { parseHorizon } from '@/lib/horizon'
 import { createServiceClient } from '@/lib/supabase'
 import { runForecast } from '@/lib/calculator'
+import { fetchAll } from '@/lib/fetch-all'
 import {
   Loan,
   LoanProgram,
@@ -13,13 +16,25 @@ import {
   ParentCompany,
   ParentCompanyPattern,
   BorrowerParentMapping,
+  PayoffSchedule,
 } from '@/lib/types'
 
-// Next 14 statically caches GET route handlers by default. Force-dynamic so
-// the forecast always reflects the current active version, originations, etc.
+// Kept explicit: Next 15 no longer caches GET route handlers by default, but
+// stating it means a future default change can't silently start serving a
+// build-time snapshot instead of current DB state.
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
+// ?horizon=N recomputes the forecast for exactly N months, so everything
+// derived from the months — the peak, the charts, the Monthly Summary, every
+// horizon-wide total — covers only that span. Only HORIZON_OPTIONS are
+// accepted; anything else is ignored and the stored
+// forecast_settings.horizon_months applies, as it does when omitted.
+function requestedHorizon(req: Request): number | null {
+  return parseHorizon(new URL(req.url).searchParams.get('horizon'))
+}
+
+export async function GET(req: Request) {
+  const horizon = requestedHorizon(req)
   try {
     const sb = createServiceClient()
 
@@ -77,8 +92,8 @@ export async function GET() {
       }, { status: 500 })
     }
 
-    const [loansRes, buildersRes, programsRes, projectsRes, origsRes, hhhJvRes, aAndDRes, parentsRes, patternsRes, mappingsRes] = await Promise.all([
-      sb.from('loans').select('*').eq('version_id', version.id),
+    const [loansRes, buildersRes, programsRes, projectsRes, origsRes, hhhJvRes, aAndDRes, parentsRes, patternsRes, mappingsRes, payoffRes] = await Promise.all([
+      fetchAll<Loan>(sb.from('loans').select('*').eq('version_id', version.id)),
       sb.from('builders').select('*'),
       sb.from('loan_programs').select('*'),
       sb.from('land_bucket_projects').select('*'),
@@ -88,6 +103,7 @@ export async function GET() {
       sb.from('parent_companies').select('*'),
       sb.from('parent_company_patterns').select('*'),
       sb.from('borrower_parent_mapping').select('*'),
+      sb.from('payoff_schedules').select('*'),
     ])
 
     if (loansRes.error)    throw loansRes.error
@@ -117,6 +133,11 @@ export async function GET() {
     const borrowerParentMappings: BorrowerParentMapping[] = mappingsRes.error
       ? []
       : ((mappingsRes.data ?? []) as BorrowerParentMapping[])
+    // Historical payoff schedules (migration 023) — same graceful fallback;
+    // without them historical mode behaves exactly like maturity.
+    const payoffSchedules: PayoffSchedule[] = payoffRes.error
+      ? []
+      : ((payoffRes.data ?? []) as PayoffSchedule[])
 
     const result = runForecast({
       loans:               (loansRes.data    ?? []) as Loan[],
@@ -129,7 +150,10 @@ export async function GET() {
       parentCompanies,
       parentCompanyPatterns,
       borrowerParentMappings,
-      settings:            settings as ForecastSettings,
+      payoffSchedules,
+      settings:            horizon == null
+                             ? settings as ForecastSettings
+                             : { ...(settings as ForecastSettings), horizon_months: horizon },
       versionLabel:        version.label,
       // Active version's as_of_date wins. Fall back to its import timestamp
       // (created_at), not today — today would silently drift forward every
@@ -137,6 +161,13 @@ export async function GET() {
       asOfDate:            version.as_of_date
                              || (version.created_at ? String(version.created_at).slice(0, 10)
                                                     : new Date().toISOString().split('T')[0]),
+      // Today, in the same clock the engine uses for the horizon start
+      // (startOfMonth(new Date())), so the two can never disagree about which
+      // month is current. Drives how much of this month's anticipated
+      // originations the forecast still carries: half on the 15th, none on
+      // the last day. Deliberately separate from asOfDate above, which must
+      // not drift with the calendar.
+      today:               format(new Date(), 'yyyy-MM-dd'),
     })
 
     return NextResponse.json(result)

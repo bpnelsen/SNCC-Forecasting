@@ -7,6 +7,7 @@ import {
 import { LandBucketProject, Builder, LoanProgram, ForecastResult } from '@/lib/types'
 import { formatCurrency } from '@/lib/utils'
 import { LandBucketProjectionChart } from '@/components/charts/PortfolioCharts'
+import { previewLandBucketProject } from '@/lib/calculator'
 
 // Deterministic palette for the stacked-area projection chart — projects are
 // sorted by name before colors are assigned so the mapping is stable.
@@ -31,6 +32,7 @@ const emptyForm = (): FormState => ({
   vertical_loan_program_id: null,
   vertical_loan_amount: null,
   lot_release_schedule: {},
+  balance_increase_schedule: {},
   notes: null,
 })
 
@@ -137,7 +139,7 @@ export default function LandBucketPage() {
   if (loading) return <div className="p-6 text-fg-dim text-sm">Loading…</div>
 
   return (
-    <div className="p-6 space-y-6 max-w-6xl">
+    <div className="p-6 space-y-6 max-w-[1227px]">
       <div className="flex items-center justify-between fade-up fade-up-1">
         <div>
           <h1 className="text-lg font-medium text-fg-strong flex items-center gap-2">
@@ -210,7 +212,11 @@ export default function LandBucketPage() {
                   group={group}
                   programs={programs}
                   busy={busy}
-                  onEdit={p => setEditing({ ...p, lot_release_schedule: p.lot_release_schedule ?? {} })}
+                  onEdit={p => setEditing({
+                    ...p,
+                    lot_release_schedule: p.lot_release_schedule ?? {},
+                    balance_increase_schedule: p.balance_increase_schedule ?? {},
+                  })}
                   onDelete={remove}
                 />
               ))}
@@ -325,6 +331,16 @@ function ProjectEditor({
               totalLots={form.total_lots}
               value={form.lot_release_schedule ?? {}}
               onChange={v => u({ lot_release_schedule: v })}
+            />
+          </div>
+
+          <div className="col-span-2">
+            <BalanceIncreaseEditor
+              form={form}
+              builders={builders}
+              programs={programs}
+              value={form.balance_increase_schedule ?? {}}
+              onChange={v => u({ balance_increase_schedule: v })}
             />
           </div>
 
@@ -476,6 +492,108 @@ function LotReleaseScheduleEditor({
 // company; clicking opens an inline parent picker. Available parents come
 // from forecast.parent_companies so the strip can attach to any parent the
 // user has set up on Assumptions.
+// Projected balance increases (migration 022). Starts NEXT month: this
+// month's balance is the Balance Outstanding field above, so an increase for
+// this month would count twice. Each cell shows the balance the forecast will
+// carry that month, from previewLandBucketProject — the same engine function
+// the Dashboard and Forecast tab use, so this preview can't disagree with them.
+function BalanceIncreaseEditor({
+  form, builders, programs, value, onChange,
+}: {
+  form: FormState
+  builders: Builder[]
+  programs: LoanProgram[]
+  value: Record<string, number>
+  onChange: (v: Record<string, number>) => void
+}) {
+  const preview = useMemo(
+    () => previewLandBucketProject(
+      { ...form, id: form.id ?? 'preview', balance_increase_schedule: value } as LandBucketProject,
+      builders, programs, HORIZON_MONTHS + 1,
+    ),
+    [form, builders, programs, value],
+  )
+  // preview[0] is this month; the grid covers the months after it.
+  const months = preview.slice(1)
+  const monthsSet = new Set(months.map(m => m.month))
+  const thisMonth = preview[0]?.month ?? ''
+  // Stored entries the forecast won't apply — this month or earlier, or past
+  // the grid — listed so they don't silently disappear.
+  const notApplied = Object.keys(value).filter(k => !monthsSet.has(k)).sort()
+  const total = months.reduce((s, m) => s + (Number(value[m.month]) || 0), 0)
+
+  const set = (monthKey: string, dollars: number) => {
+    const next = { ...value }
+    if (dollars > 0) next[monthKey] = dollars
+    else delete next[monthKey]
+    onChange(next)
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <div className="text-[10px] text-fg-dim">Projected Balance Increases ($ per month)</div>
+        <div className="flex items-center gap-2 text-[10px] text-fg-dim">
+          <span>Total: <span className="text-fg font-mono">{formatCurrency(total, true)}</span></span>
+          {Object.keys(value).length > 0 && (
+            <button type="button" onClick={() => onChange({})} className="btn-ghost text-[10px] py-0.5 px-1.5">
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-4 gap-2 p-3 rounded border border-border-strong">
+        {months.map(m => (
+          <label key={m.month} className="flex flex-col gap-0.5">
+            <span className="text-[10px] font-mono text-fg-dim">{m.month}</span>
+            <input
+              type="number"
+              min={0}
+              step={10000}
+              className="form-input text-right text-xs py-1 px-2"
+              value={value[m.month] ?? 0}
+              onChange={e => set(m.month, Math.max(0, Number(e.target.value) || 0))}
+            />
+            <span className="text-[10px] text-fg-dim text-right font-mono" title="Balance the forecast carries this month">
+              → {formatCurrency(m.starting_balance, true)}
+            </span>
+          </label>
+        ))}
+      </div>
+
+      {notApplied.length > 0 && (
+        <div className="mt-2 p-2 rounded border border-danger/40 bg-danger/5">
+          <div className="text-[10px] text-danger mb-1">
+            {notApplied.length} entr{notApplied.length === 1 ? 'y' : 'ies'} not applied — this month
+            ({thisMonth}) or earlier is already in Balance Outstanding, or the month is beyond the grid.
+            Fold it into Balance Outstanding, or remove it.
+          </div>
+          <div className="grid grid-cols-4 gap-2">
+            {notApplied.map(k => (
+              <label key={k} className="flex items-center gap-2">
+                <span className="text-[10px] font-mono text-fg-dim w-14 shrink-0">{k}</span>
+                <input
+                  type="number" min={0} step={10000}
+                  className="form-input text-right text-xs py-1 px-2"
+                  value={value[k] ?? 0}
+                  onChange={e => set(k, Math.max(0, Number(e.target.value) || 0))}
+                />
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="text-[10px] text-fg-dim mt-1 italic">
+        Added at the start of the month, so it shows in that month&rsquo;s balance and earns interest from it.
+        Lot-sale paydowns still come off as usual. The figure under each month is the balance the forecast
+        carries — the same number the Dashboard and Forecast tab use.
+      </div>
+    </div>
+  )
+}
+
 function BuilderParentChip({
   builder, parents, onChange,
 }: {
@@ -628,10 +746,12 @@ function BuilderGroup({
             </td>
             <td>{lp?.name ?? <span className="text-fg-dim">—</span>}</td>
             <td className="text-[10px] font-mono">{p.lot_sales_start_date ?? '—'}</td>
-            <td className="flex gap-1">
-              <button onClick={() => onEdit(p)} className="btn-ghost"><Pencil className="w-3 h-3" /></button>
-              <button onClick={() => onDelete(p)} disabled={busy}
-                      className="btn-ghost text-danger"><Trash2 className="w-3 h-3" /></button>
+            <td>
+              <div className="flex gap-1 justify-end">
+                <button onClick={() => onEdit(p)} className="btn-ghost" title="Edit"><Pencil className="w-3 h-3" /></button>
+                <button onClick={() => onDelete(p)} disabled={busy}
+                        className="btn-ghost text-danger" title="Delete"><Trash2 className="w-3 h-3" /></button>
+              </div>
             </td>
           </tr>
         )
@@ -733,16 +853,18 @@ function ProjectionCard({
   const aggregate = useMemo(() => {
     if (!forecast) {
       return [] as { month: string; label: string; balance: number; lotsSold: number;
-                     lotsCum: number; lotsRemaining: number; proceeds: number }[]
+                     lotsCum: number; lotsRemaining: number; proceeds: number; increases: number }[]
     }
     return forecast.months.map((m, i) => {
       let lotsCum = 0
       let lotsRemaining = 0
+      let increases = 0
       for (const sch of forecast.land_bucket_schedules) {
         const row = sch.months[i]
         if (!row) continue
         lotsCum       += row.lots_sold_cumulative
         lotsRemaining += row.lots_remaining
+        increases     += row.balance_increase ?? 0
       }
       return {
         month: m.month,
@@ -752,6 +874,7 @@ function ProjectionCard({
         proceeds: m.lot_sale_proceeds,
         lotsCum,
         lotsRemaining,
+        increases,
       }
     })
   }, [forecast])
@@ -825,6 +948,14 @@ function ProjectionCard({
               <td className="sticky left-0 z-10 bg-border/30 text-fg-strong">Balance</td>
               {aggregate.map(r => (
                 <td key={r.month} className="num">{formatCurrency(r.balance, true)}</td>
+              ))}
+            </tr>
+            <tr>
+              <td className="sticky left-0 z-10 bg-surface text-fg">Projected increases</td>
+              {aggregate.map(r => (
+                <td key={r.month} className="num">
+                  {r.increases ? `+${formatCurrency(r.increases, true)}` : <span className="text-fg-dim">—</span>}
+                </td>
               ))}
             </tr>
             <tr>

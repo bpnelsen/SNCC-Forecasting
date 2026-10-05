@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase'
 
 // POST (not PUT) updates an existing project — some hosts reject PUT with 405.
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
+
   try {
     const body = await req.json()
     const sb   = createServiceClient()
@@ -29,7 +31,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const { error } = await sb
       .from('hhh_jv_projects')
       .update(payload)
-      .eq('id', params.id)
+      .eq('id', id)
 
     if (error) throw error
     return NextResponse.json({ ok: true })
@@ -38,10 +40,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
+
   try {
     const sb = createServiceClient()
-    const { error } = await sb.from('hhh_jv_projects').delete().eq('id', params.id)
+    const { error } = await sb.from('hhh_jv_projects').delete().eq('id', id)
     if (error) throw error
     return NextResponse.json({ ok: true })
   } catch (e) {

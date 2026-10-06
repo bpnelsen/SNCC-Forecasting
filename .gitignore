@@ -33,3 +33,6 @@ next-env.d.ts.bak
 .env.local
 .env*.local
 *.tsbuildinfo
+
+# Local analysis output — loan-level data, never commit
+analysis/

@@ -8,7 +8,7 @@ import type { PayoffLoanType, PayoffSchedule } from '@/lib/types'
 // build-time snapshot instead of current DB state.
 export const dynamic = 'force-dynamic'
 
-const MIGRATION_HINT = 'Run supabase/migrations/023_payoff_schedules.sql in the Supabase SQL editor.'
+const MIGRATION_HINT = 'Run supabase/migrations/023_payoff_schedules.sql and 024_payoff_schedule_import.sql in the Supabase SQL editor.'
 
 function errMessage(e: unknown): string {
   if (e instanceof Error) return e.message
@@ -50,16 +50,20 @@ export async function POST(req: NextRequest) {
       if (!PAYOFF_LOAN_TYPES.includes(loanType)) {
         return NextResponse.json({ error: `Unknown loan_type: ${String(raw?.loan_type)}` }, { status: 400 })
       }
-      const months = Number(raw?.payoff_months)
-      if (!Number.isInteger(months) || months < 1 || months > 600) {
+      // Tenths of a month are kept (migration 024): 6.5 stays 6.5.
+      const months = Math.round(Number(raw?.payoff_months) * 10) / 10
+      if (!Number.isFinite(months) || months < 0.1 || months > 600) {
         return NextResponse.json({
-          error: `payoff_months must be a whole number of months from 1 to 600 (got ${String(raw?.payoff_months)})`,
+          error: `payoff_months must be from 0.1 to 600 months (got ${String(raw?.payoff_months)})`,
         }, { status: 400 })
       }
+      const count = Number(raw?.loan_count)
       const row: PayoffSchedule = {
         parent_company_id: raw?.parent_company_id ? String(raw.parent_company_id) : null,
         loan_type: loanType,
         payoff_months: months,
+        loan_count: Number.isInteger(count) && count > 0 ? count : null,
+        source: raw?.source === 'import' ? 'import' : 'manual',
       }
       wanted.set(keyOf(row), row)
     }
@@ -75,7 +79,9 @@ export async function POST(req: NextRequest) {
     for (const [key, row] of wanted) {
       const prev = existingByKey.get(key)
       if (!prev) toInsert.push(row)
-      else if (Number(prev.payoff_months) !== row.payoff_months) toUpdate.push({ ...row, id: prev.id })
+      else if (Number(prev.payoff_months) !== row.payoff_months
+            || (prev.loan_count ?? null) !== row.loan_count
+            || (prev.source ?? 'manual') !== row.source) toUpdate.push({ ...row, id: prev.id })
     }
 
     if (toDelete.length > 0) {
@@ -84,7 +90,10 @@ export async function POST(req: NextRequest) {
     }
     for (const row of toUpdate) {
       const { error } = await sb.from('payoff_schedules')
-        .update({ payoff_months: row.payoff_months, updated_at: new Date().toISOString() })
+        .update({
+          payoff_months: row.payoff_months, loan_count: row.loan_count, source: row.source,
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', row.id!)
       if (error) throw error
     }
@@ -97,6 +106,10 @@ export async function POST(req: NextRequest) {
     if (error) throw error
     return NextResponse.json(data ?? [])
   } catch (e) {
-    return NextResponse.json({ error: errMessage(e) }, { status: 500 })
+    // A database without migration 024 rejects tenths and the loan_count /
+    // source columns — say which migration fixes it.
+    const msg = errMessage(e)
+    const hint = /loan_count|source|invalid input syntax for type integer/i.test(msg) ? ` — ${MIGRATION_HINT}` : ''
+    return NextResponse.json({ error: msg + hint }, { status: 500 })
   }
 }

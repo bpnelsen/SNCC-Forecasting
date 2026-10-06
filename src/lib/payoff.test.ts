@@ -109,6 +109,9 @@ describe('payoffMonthsFor', () => {
     expect(payoffMonthsFor(rows, 'other-parent', 'SFR')).toBe(9)
     expect(payoffMonthsFor(rows, '__none__', 'SFR')).toBe(9)
   })
+  it('keeps tenths', () => {
+    expect(payoffMonthsFor([schedule({ payoff_months: 6.54 })], PARENT.id, 'SFR')).toBe(6.5)
+  })
   it('returns null when no row covers the loan type', () => {
     expect(payoffMonthsFor(rows, PARENT.id, 'MFR')).toBeNull()
   })
@@ -124,6 +127,13 @@ describe('loanPayoffPlan', () => {
   it('falls back to maturity when the assumed payoff is already past', () => {
     const old = loan({ loan_funded_date: `${monthKey(-10)}-01` })
     expect(loanPayoffPlan(old, PARENT.id, [schedule()], [SF_PROGRAM], start)).toBeNull()
+  })
+  it('keeps tenths: whole calendar months, then the fraction in days', () => {
+    const plan = loanPayoffPlan(loan(), PARENT.id, [schedule({ payoff_months: 6.5 })], [SF_PROGRAM], start)
+    // funded the 1st, 3 months ago → 6 months later is the 1st of month +3,
+    // plus 0.5 × 30.44 ≈ 15 days.
+    expect(plan?.payoff_date).toBe(`${monthKey(3)}-16`)
+    expect(plan?.payoff_months).toBe(6.5)
   })
   it('falls back to maturity without a funded date', () => {
     expect(loanPayoffPlan(loan({ loan_funded_date: null }), PARENT.id, [schedule()], [SF_PROGRAM], start)).toBeNull()
@@ -216,6 +226,16 @@ describe('runForecast — Maturity vs Historical', () => {
       near(r.months[4].forecasted_sfr, 1_000_000)
       expect(r.months[5].forecasted_sfr).toBe(0)
       near(r.months[5].payoffs_by_segment.sfr, 1_000_000)
+    })
+
+    it('round a fractional assumption to whole months', () => {
+      const r = runForecast(input({
+        loans: [], newOriginations: [entry()],
+        payoffSchedules: [schedule({ payoff_months: 3.6 })],
+      }))
+      // 3.6 → 4 months, same as the whole-month case above.
+      near(r.months[4].forecasted_sfr, 1_000_000)
+      expect(r.months[5].forecasted_sfr).toBe(0)
     })
 
     it('run to the program term in maturity mode', () => {

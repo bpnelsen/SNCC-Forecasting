@@ -609,11 +609,16 @@ export type PayoffLoanType = 'SFR' | 'OTC' | 'MFR' | 'A&D' | 'RAW_LAND' | 'FINIS
 
 // Assumed months from funding to payoff for one parent × loan type
 // (migration 023). parent_company_id null = default for parents with no row.
+// payoff_months carries tenths (migration 024).
 export interface PayoffSchedule {
   id?: string
   parent_company_id: string | null
   loan_type: PayoffLoanType
   payoff_months: number
+  // Migration 024: how many payoffs an imported average came from, and
+  // whether the cell holds that import or a typed / edited value.
+  loan_count?: number | null
+  source?: 'import' | 'manual'
 }
 
 // ─── Forecast outputs for Module 1 (Land Bucket) ────────────────────────────

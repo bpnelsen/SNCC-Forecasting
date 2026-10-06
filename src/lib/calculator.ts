@@ -1,4 +1,4 @@
-import { addMonths, format, parseISO, startOfMonth, isBefore } from 'date-fns'
+import { addDays, addMonths, format, parseISO, startOfMonth, isBefore } from 'date-fns'
 import {
   Loan,
   LoanType,
@@ -119,6 +119,11 @@ export function effectiveDraw(program: Pick<LoanProgram, 'draw_curve' | 'default
 
 export const PAYOFF_LOAN_TYPES: PayoffLoanType[] = ['SFR', 'OTC', 'MFR', 'A&D', 'RAW_LAND', 'FINISHED_LOTS']
 
+// Average days in a month. Payoff months carry tenths (6.5): an existing
+// loan pays off at funded + 6 calendar months + 0.5 × this many days. The
+// loan-report import measures terms the same way (days ÷ this).
+export const DAYS_PER_MONTH = 365.25 / 12
+
 // Program product type → the loan type whose payoff schedule a forecast cohort
 // follows. OTHER has no schedule.
 const PRODUCT_TYPE_TO_PAYOFF_TYPE: Partial<Record<ProductType, PayoffLoanType>> = {
@@ -140,7 +145,7 @@ export function payoffMonthsFor(
     ? schedules.find(r => valid(r) && r.parent_company_id === parentId)
     : undefined
   const row = own ?? schedules.find(r => valid(r) && !r.parent_company_id)
-  return row ? Math.floor(Number(row.payoff_months)) : null
+  return row ? Math.round(Number(row.payoff_months) * 10) / 10 : null
 }
 
 /**
@@ -166,11 +171,14 @@ export function prorateDrawCurve(curve: number[], fromTerm: number, toTerm: numb
 }
 
 // Program with its term replaced by `months` and its curve prorated to match.
+// Forecast cohorts move in whole months, so a fractional assumption (6.5)
+// rounds to the nearest month (7), at least 1.
 export function programForPayoffMonths(program: LoanProgram, months: number): LoanProgram {
+  const term = Math.max(1, Math.round(months))
   return {
     ...program,
-    default_term_months: months,
-    draw_curve: prorateDrawCurve(program.draw_curve, program.default_term_months, months),
+    default_term_months: term,
+    draw_curve: prorateDrawCurve(program.draw_curve, program.default_term_months, term),
   }
 }
 
@@ -191,13 +199,16 @@ export function loanPayoffPlan(
   if (!loan.loan_funded_date) return null
   const months = payoffMonthsFor(schedules, parentId, loan.loan_type)
   if (months == null) return null
-  const payoff = addMonths(parseISO(loan.loan_funded_date), months)
+  // Whole months are calendar months; the tenths add days (6.5 → 6 months + 15 days).
+  const whole = Math.floor(months)
+  const payoff = addDays(addMonths(parseISO(loan.loan_funded_date), whole),
+                         Math.round((months - whole) * DAYS_PER_MONTH))
   if (isNaN(payoff.getTime()) || payoff < startOfMonth(startDate)) return null
   const program = drawProgramForLoanType(loan.loan_type, programs)
   return {
     payoff_date: format(payoff, 'yyyy-MM-dd'),
     payoff_months: months,
-    curve: program ? programForPayoffMonths(program, months).draw_curve : null,
+    curve: program ? prorateDrawCurve(program.draw_curve, program.default_term_months, months) : null,
   }
 }
 

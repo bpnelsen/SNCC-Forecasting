@@ -43,7 +43,7 @@ Create a project at [supabase.com](https://supabase.com), pick a nearby region, 
 ### 3. Run the database migrations — **all of them, in order**
 
 In Supabase Dashboard → **SQL Editor**, run every file in `supabase/migrations/`
-in filename order (`001_…` through `023_…`).
+in filename order (`001_…` through `024_…`).
 
 Running only `001` is not enough — the app will not start. `002` creates
 `forecast_settings`, which `/api/calculate` requires, and later migrations add
@@ -72,6 +72,7 @@ true, and asserts RLS is enabled on every table.
 | `021` | Drops the orphaned `scheduled_originations` table (guarded — refuses if it has rows) |
 | `022` | Adds `balance_increase_schedule` to Land Bucket projects (projected monthly balance increases). Until it runs, projects save normally but increases can't be saved |
 | `023` | `payoff_schedules` + `forecast_settings.payoff_mode` — the Maturity / Historical switch. Until it runs the app stays on Maturity and the switch is disabled |
+| `024` | Payoff months keep tenths (6.5), plus `loan_count` / `source` for loan-report imports. Until it runs, saving an imported grid fails with a pointer to this file |
 
 ### 4. Configure environment variables
 
@@ -222,10 +223,27 @@ it changes every page, every viewer and the `/ask` assistant.
   SFR, OTC, MFR, A&D, Raw Land, Finished Lots). The program draw curve is
   prorated so the draw that took the maturity term fits inside N months.
 
+**Filling the grid from a loan report.** On Payoff Schedules, *Import from
+loan report* takes the same Current Report export and averages, for each parent
+company × loan type, the months from **Loan Funded Date** to **Loan Status
+Completed Date** of the loans whose **Current Loan Status** is *Completed* and
+that completed in the last **2 years**. A cell needs **5 payoffs**, otherwise it
+stays blank and uses the Default row (the average of every loan of that type).
+Months keep tenths (days ÷ 30.44). Loan type comes from the import's
+`classifyLoan()` and parent company from the same borrower → parent rules the
+forecast uses; borrowers that match no parent count toward the Default row only
+and are listed so they can be mapped. The import fills the grid **unsaved** —
+imported cells are shaded with their loan count, any cell can be edited (it
+then reads *manual*), and nothing applies until **Save Changes**. Logic:
+`src/lib/payoff-import.ts`.
+
 Historical-mode rules:
 
 - A parent's own value wins, then the **Default** row, then the loan's
   maturity date (no value anywhere → behaves exactly as in Maturity).
+- Tenths are kept: a loan pays off at funded + N whole calendar months + the
+  fraction × 30.44 days (6.5 → 6 months and ~15 days). Forecast cohorts move
+  in whole months, so they round to the nearest month.
 - A loan whose funded + N months is already **before the current month**
   keeps its maturity payoff. So does a loan with no funded date.
 - The assumed payoff replaces maturity in both directions — it can be earlier
@@ -338,7 +356,7 @@ src/
     ├── parser.ts               # Excel → Loan[]  (+ parser.test.ts)
     ├── calculator.ts           # forecast engine  (+ calculator.test.ts)
     └── types.ts, utils.ts, gemini-tools.ts
-supabase/migrations/            # 001–023, apply all in order
+supabase/migrations/            # 001–024, apply all in order
 .github/workflows/ci.yml        # typecheck, lint, test, build, migrations
 ```
 

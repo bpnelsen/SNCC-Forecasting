@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx'
 import { Loan, LoanType } from './types'
 
-function classifyLoan(program: string, _borrower: string, _development: string): LoanType {
+export function classifyLoan(program: string, _borrower: string = '', _development: string = ''): LoanType {
   const p = (program || '').toLowerCase()
   // Classification is program-only. Borrower-name overrides (an earlier
   // "Holmes → HHH/JV" shortcut) were removed: parent-company attribution
@@ -73,7 +73,7 @@ const KNOWN_HEADERS = new Set([
   'subdivision name',
 ])
 
-function findHeaderRow(rows: unknown[][]): number {
+export function findHeaderRow(rows: unknown[][]): number {
   // Headers can live well below row 1 — the canonical SNCC report puts them on
   // row 31, and the pre-header block contains decoy strings like
   // "Borrower first name", "Co-Borrower 1 name" that a naive substring search
